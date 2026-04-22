@@ -1,0 +1,18 @@
+{
+  "hooks": {
+    "PreToolUse": [
+      {
+        "matcher": "Bash",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "python3 -c \"\nimport json, sys, re\ndata = json.load(sys.stdin)\ncmd = data.get('tool_input', {}).get('command', '')\npatterns = [\n    r'DROP\\s+TABLE',\n    r'DROP\\s+DATABASE',\n    r'DELETE\\s+FROM\\s+\\w+\\s*(?!WHERE)',\n    r'DELETE\\s+FROM\\s+\\w+\\s*;',\n    r'(rm|del)\\s+.*data\\.db',\n]\nfor p in patterns:\n    if re.search(p, cmd, re.IGNORECASE):\n        print(json.dumps({'continue': False, 'stopReason': 'BLOQUE: operation destructive BDD detectee. Demandez confirmation explicite avant de DROP/DELETE/supprimer data.db.'}))\n        sys.exit(0)\n\"",
+            "shell": "bash",
+            "timeout": 10,
+            "statusMessage": "Verification securite BDD..."
+          }
+        ]
+      }
+    ]
+  }
+}
