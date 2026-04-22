@@ -1,4 +1,4 @@
-import type { Simulation, Hypothesis, Lever, LeverConfig, Store, Preset, GlobalParams } from '../types';
+import type { Simulation, Hypothesis, Lever, LeverConfig, Store, Preset, GlobalParams, Prestation } from '../types';
 
 const BASE = '/api';
 
@@ -80,6 +80,14 @@ export const api = {
     req<{ id: string }>('PUT', `/hypotheses/${hypId}/levers/${id}`, updates),
   deleteLever: (hypId: string, id: string) =>
     req<void>('DELETE', `/hypotheses/${hypId}/levers/${id}`),
+
+  // ── Prestations ──────────────────────────────────────────────
+  postPrestation: (simId: string, p: Prestation) =>
+    req<{ id: string }>('POST', `/simulations/${simId}/prestations`, p),
+  putPrestation: (simId: string, id: string, updates: Partial<Prestation>) =>
+    req<{ id: string }>('PUT', `/simulations/${simId}/prestations/${id}`, updates),
+  deletePrestation: (simId: string, id: string) =>
+    req<void>('DELETE', `/simulations/${simId}/prestations/${id}`),
 
   // ── Replace (used by undo/redo) ──────────────────────────────
   replaceSimulation: (id: string, body: {

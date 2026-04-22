@@ -22,6 +22,7 @@ function getPresetsWithLevers() {
       .map(l => ({
         type: l.type,
         cpm: l.cpm,
+        purchaseCpm: l.purchase_cpm ?? 0,
         minBudgetPerStore: l.min_budget_per_store,
         budget: l.budget,
         budgetPercent: l.budget_percent,
@@ -51,12 +52,12 @@ router.post('/', (req, res) => {
   const nextOrder = (maxOrder?.m ?? -1) + 1;
 
   const insertPreset = db.prepare(`INSERT INTO presets (id, name, description, objective_mode, budget_mode, scope, owner_profile_id, sort_order, total_budget, max_budget_per_store) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`);
-  const insertLever = db.prepare(`INSERT INTO preset_levers (id, preset_id, type, cpm, min_budget_per_store, budget, budget_percent, repetition, coverage, max_coverage, impressions, start_date, end_date, sort_order) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`);
+  const insertLever = db.prepare(`INSERT INTO preset_levers (id, preset_id, type, cpm, purchase_cpm, min_budget_per_store, budget, budget_percent, repetition, coverage, max_coverage, impressions, start_date, end_date, sort_order) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`);
 
   db.transaction(() => {
     insertPreset.run(id, name, description || '', objectiveMode || 'budget', budgetMode || 'automatique', presetScope, ownerId, nextOrder, tb, mbps);
     (levers || []).forEach((l, i) => {
-      insertLever.run(randomUUID(), id, l.type, l.cpm, l.minBudgetPerStore, l.budget, l.budgetPercent, l.repetition, l.coverage, l.maxCoverage, l.impressions, l.startDate || '', l.endDate || '', i);
+      insertLever.run(randomUUID(), id, l.type, l.cpm, l.purchaseCpm ?? 0, l.minBudgetPerStore, l.budget, l.budgetPercent, l.repetition, l.coverage, l.maxCoverage, l.impressions, l.startDate || '', l.endDate || '', i);
     });
   })();
 

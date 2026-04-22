@@ -1,4 +1,4 @@
-export type LeverType = 'Display' | 'Desktop' | 'Meta' | 'Google' | 'Youtube' | 'Snap' | 'Pinterest' | 'TikTok';
+export type LeverType = string;
 
 export type ObjectiveMode = 'budget' | 'couverture';
 export type BudgetMode = 'automatique' | 'levier' | 'pctTotal' | 'libre' | 'v3-levier';
@@ -11,6 +11,8 @@ export interface Lever {
   startDate: string;
   endDate: string;
   cpm: number;
+  /** Prix d'achat CPM (€). Sert au calcul de marge. */
+  purchaseCpm: number;
   minBudgetPerStore: number;
   budget: number;
   budgetPercent: number;
@@ -32,11 +34,14 @@ export interface Hypothesis {
   levers: Lever[];
   collapsed: boolean;
   zoneId: ZoneId;
+  /** Rétrocommission appliquée sur le budget total (en %). */
+  retrocommissionPercent?: number;
 }
 
 export interface Prestation {
   id: string;
   name: string;
+  category?: string;
   quantity: number;
   productionCost: number;
   /** Unit price in €. Total billed = quantity * price unless offered. */
@@ -67,7 +72,7 @@ export interface Preset {
   totalBudget?: number;
   /** Budget max par point de vente associé au preset. */
   maxBudgetPerStore?: number;
-  levers: Omit<Lever, 'id' | 'collapsed'>[];
+  levers: (Omit<Lever, 'id' | 'collapsed' | 'purchaseCpm'> & { purchaseCpm?: number })[];
   /** Défaut `admin` si absent (rétrocompat). */
   scope?: PresetScope;
   /** Si `scope === 'user'`, identifiant du profil créateur. */
@@ -82,7 +87,13 @@ export interface Store {
 
 export interface LeverConfig {
   type: LeverType;
+  /** Libellé d'affichage (fallback = type). */
+  label?: string;
+  /** Famille (ex : "Display Mobile", "Meta", "CTV") pour regrouper dans l'UI. */
+  family?: string;
   defaultCpm: number;
+  /** Prix d'achat CPM par défaut (€). Sert au calcul de marge. */
+  purchaseCpm: number;
   minBudgetPerStore: number;
   maxCoverage: number;
   color: string;

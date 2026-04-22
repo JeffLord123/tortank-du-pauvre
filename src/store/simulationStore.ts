@@ -285,6 +285,20 @@ export interface HypothesisSummary {
   coverageDetail: { name: string; coverage: number }[];
   avgRepetition: number;
   leverBreakdown: { name: string; budget: number; impressions: number; color: string }[];
+  /** Achat total (€) = Σ budget_levier * (purchaseCpm / cpm). */
+  purchaseTotal: number;
+  /** Total des prestations additionnelles (€). */
+  prestationsSaleTotal: number;
+  /** Budget total + prestations (€). */
+  grandTotal: number;
+  /** Taux de rétrocommission (%). */
+  retrocommissionPercent: number;
+  /** Rétrocommission appliquée (€). */
+  retrocommissionAmount: number;
+  /** Marge absolue (€) = vente - achat - rétrocommission. */
+  marginAmount: number;
+  /** Marge en % du budget total (0 si budget = 0). */
+  marginPercent: number;
 }
 
 function equalBudgetPercents(levers: Lever[]): Lever[] {
@@ -349,6 +363,19 @@ function recalcHypothesis(h: Hypothesis, _simStart: string, _simEnd: string, con
   }
 
   if (h.budgetMode === 'levier' || h.budgetMode === 'libre' || h.budgetMode === 'v3-levier') {
+    updated.totalBudget = updated.levers.reduce((s, l) => s + l.budget, 0);
+    // Budget is fixed by user — recalc coverage from budget with new zone population
+    for (const lever of updated.levers) {
+      const newCov = calcCoverageFromBudget(lever.budget, lever.cpm, lever.repetition, lever.maxCoverage, zoneAvgPop, storeCount);
+      lever.coverage = newCov;
+    }
+  }
+
+  // Mode couverture objectif (V2): coverage is fixed — recalc budget from coverage with new zone population
+  if (isCoverageObjective) {
+    for (const lever of updated.levers) {
+      lever.budget = calcBudgetFromCoverage(lever.coverage, lever.cpm, lever.repetition, zoneAvgPop, storeCount);
+    }
     updated.totalBudget = updated.levers.reduce((s, l) => s + l.budget, 0);
   }
 
@@ -513,6 +540,7 @@ export const useSimulationStore = create<SimulationState>((set, get) => ({
         levers: [],
         collapsed: false,
         zoneId: 'zone1',
+        retrocommissionPercent: 0,
       };
       const sim = { ...state.simulation, hypotheses: [...state.simulation.hypotheses, h] };
       api.postHypothesis(state.simulation.id, { ...h, sort_order: sim.hypotheses.length - 1 }).catch(console.error);
@@ -602,6 +630,7 @@ export const useSimulationStore = create<SimulationState>((set, get) => ({
             objectiveMode: recalced.objectiveMode,
             budgetMode: recalced.budgetMode,
             totalBudget: recalced.totalBudget,
+            retrocommissionPercent: recalced.retrocommissionPercent ?? 0,
             collapsed: recalced.collapsed,
           }).catch(console.error);
           recalced.levers.forEach(l => {
@@ -641,6 +670,7 @@ export const useSimulationStore = create<SimulationState>((set, get) => ({
         const levers: Lever[] = preset.levers.map(pl => ({
           ...pl,
           id: uid(),
+          purchaseCpm: pl.purchaseCpm ?? state.leverConfigs[pl.type]?.purchaseCpm ?? 0,
           startDate: pl.startDate || state.simulation!.startDate,
           endDate: pl.endDate || state.simulation!.endDate,
           collapsed: false,
@@ -765,6 +795,7 @@ export const useSimulationStore = create<SimulationState>((set, get) => ({
         startDate,
         endDate,
         cpm: config.defaultCpm,
+        purchaseCpm: config.purchaseCpm ?? 0,
         minBudgetPerStore: config.minBudgetPerStore,
         budget: 0,
         budgetPercent: 0,
@@ -1099,6 +1130,7 @@ export const useSimulationStore = create<SimulationState>((set, get) => ({
       if (!state.simulation) return state;
       const prestation: Prestation = { ...p, id: uid() };
       const prestations = [...(state.simulation.prestations ?? []), prestation];
+      api.postPrestation(state.simulation.id, prestation).catch(console.error);
       return { simulation: { ...state.simulation, prestations } };
     });
   },
@@ -1109,6 +1141,7 @@ export const useSimulationStore = create<SimulationState>((set, get) => ({
       const prestations = (state.simulation.prestations ?? []).map(p =>
         p.id === id ? { ...p, ...updates } : p,
       );
+      api.putPrestation(state.simulation.id, id, updates).catch(console.error);
       return { simulation: { ...state.simulation, prestations } };
     });
   },
@@ -1117,6 +1150,7 @@ export const useSimulationStore = create<SimulationState>((set, get) => ({
     set(state => {
       if (!state.simulation) return state;
       const prestations = (state.simulation.prestations ?? []).filter(p => p.id !== id);
+      api.deletePrestation(state.simulation.id, id).catch(console.error);
       return { simulation: { ...state.simulation, prestations } };
     });
   },
@@ -1239,12 +1273,34 @@ export const useSimulationStore = create<SimulationState>((set, get) => ({
       ? Math.round((h.levers.reduce((s, l) => s + l.repetition, 0) / h.levers.length) * 10) / 10
       : 0;
 
-    const leverBreakdown = h.levers.map(l => ({
-      name: l.type,
-      budget: l.budget,
-      impressions: calcImpressions(l.budget, l.cpm),
-      color: state.leverConfigs[l.type]?.color || '#666',
-    }));
+    const leverBreakdown = h.levers.map(l => {
+      const cfg = state.leverConfigs[l.type];
+      const name = cfg?.family && cfg.family !== 'Legacy'
+        ? `${cfg.family} - ${cfg.label || l.type}`
+        : (cfg?.label || l.type);
+      return {
+        name,
+        budget: l.budget,
+        impressions: calcImpressions(l.budget, l.cpm),
+        color: cfg?.color || '#666',
+      };
+    });
+
+    // Marge : achat total = somme des (budget levier × purchaseCpm / cpm) + coûts de production prestas.
+    const realBudget = h.levers.reduce((s, l) => s + l.budget, 0);
+    const purchaseTotal = h.levers.reduce((sum, l) => {
+      if (!l.cpm || l.cpm <= 0) return sum;
+      const ratio = (l.purchaseCpm ?? 0) / l.cpm;
+      return sum + l.budget * ratio;
+    }, 0);
+    const prestations = state.simulation.prestations ?? [];
+    const prestationsSaleTotal = prestations.reduce((s, p) => s + (p.offered ? 0 : p.price * (p.quantity ?? 1)), 0);
+    const prestationsCostTotal = prestations.reduce((s, p) => s + (p.offered ? 0 : (p.productionCost ?? 0) * (p.quantity ?? 1)), 0);
+    const retrocommissionPercent = h.retrocommissionPercent ?? 0;
+    const retrocommissionAmount = realBudget * (retrocommissionPercent / 100);
+    const grandTotal = realBudget + prestationsSaleTotal;
+    const marginAmount = grandTotal - purchaseTotal - prestationsCostTotal - retrocommissionAmount;
+    const marginPercent = grandTotal > 0 ? (marginAmount / grandTotal) * 100 : 0;
 
     return {
       totalBudget,
@@ -1255,6 +1311,13 @@ export const useSimulationStore = create<SimulationState>((set, get) => ({
       coverageDetail,
       avgRepetition,
       leverBreakdown,
+      purchaseTotal,
+      prestationsSaleTotal,
+      grandTotal,
+      retrocommissionPercent,
+      retrocommissionAmount,
+      marginAmount,
+      marginPercent,
     };
   },
 }));

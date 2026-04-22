@@ -171,7 +171,11 @@ export default function LeverCardV3({ lever, hypothesis, index, budgetLocked, on
         onClick={() => toggleLeverCollapse(hypothesis.id, lever.id)}
       >
         <LeverLogoBadge cfg={config} />
-        <span className="font-semibold text-sm shrink-0">{lever.type}</span>
+        <span className="font-semibold text-sm shrink-0">
+          {config?.family && config.family !== 'Legacy'
+            ? `${config.family} - ${config.label || lever.type}`
+            : (config?.label || lever.type)}
+        </span>
 
         <div className="flex-1 min-w-0 flex items-center gap-2 flex-wrap">
           <span className="inline-flex items-center gap-1.5 text-[11px] font-mono font-semibold bg-navy-700/80 text-fg/80 px-2 py-0.5 rounded-full border border-fg/10 shrink-0">
@@ -182,6 +186,17 @@ export default function LeverCardV3({ lever, hypothesis, index, budgetLocked, on
           <span className="inline-flex items-center text-[10px] font-mono font-medium bg-navy-700/60 text-fg/75 px-1.5 py-0.5 rounded-full border border-fg/15 shrink-0">
             CPM {lever.cpm.toFixed(2)}€
           </span>
+          {(() => {
+            const purchase = lever.purchaseCpm ?? 0;
+            if (lever.cpm <= 0 || purchase <= 0) return null;
+            const m = ((lever.cpm - purchase) / lever.cpm) * 100;
+            const cls = m >= 40 ? 'text-teal-400' : m >= 35 ? 'text-amber-400' : 'text-coral-400';
+            return (
+              <span className={`inline-flex items-center text-[10px] font-mono font-medium bg-navy-700/60 px-1.5 py-0.5 rounded-full border border-fg/15 shrink-0 ${cls}`}>
+                Marge {m.toFixed(1)}%
+              </span>
+            );
+          })()}
           <span className="inline-flex items-center text-[11px] font-medium bg-navy-700/60 text-fg/75 px-2 py-0.5 rounded-full border border-fg/15 shrink-0">
             {lever.coverage}% couv.
           </span>
@@ -208,6 +223,44 @@ export default function LeverCardV3({ lever, hypothesis, index, budgetLocked, on
       <div className={`collapse-transition ${lever.collapsed ? '' : 'open'}`}>
         <div>
           <div className="px-4 pb-4 space-y-4 border-t border-fg/12 pt-4">
+            {/* CPM vente & achat */}
+            <div className="grid grid-cols-3 gap-3">
+              <div>
+                <label className="text-[10px] uppercase tracking-wider text-fg/60 mb-1 block">CPM vente (€)</label>
+                <NumInput
+                  value={lever.cpm}
+                  onChange={v => updateLever(hypothesis.id, lever.id, { cpm: v })}
+                  min={0}
+                  step={0.1}
+                  className="w-full bg-navy-800/60 border border-navy-600/30 rounded-md px-2 py-1.5 text-xs font-mono text-fg focus:outline-none focus:border-teal-400/40 transition-colors"
+                />
+              </div>
+              <div>
+                <label className="text-[10px] uppercase tracking-wider text-fg/60 mb-1 block">CPM achat (€)</label>
+                <NumInput
+                  value={lever.purchaseCpm ?? 0}
+                  onChange={v => updateLever(hypothesis.id, lever.id, { purchaseCpm: v })}
+                  min={0}
+                  step={0.1}
+                  className="w-full bg-navy-800/60 border border-navy-600/30 rounded-md px-2 py-1.5 text-xs font-mono text-fg focus:outline-none focus:border-teal-400/40 transition-colors"
+                />
+              </div>
+              <div>
+                <label className="text-[10px] uppercase tracking-wider text-fg/60 mb-1 block">Marge</label>
+                {(() => {
+                  const purchase = lever.purchaseCpm ?? 0;
+                  const mPct = lever.cpm > 0 ? ((lever.cpm - purchase) / lever.cpm) * 100 : 0;
+                  const mEur = lever.cpm - purchase;
+                  const cls = mPct >= 40 ? 'text-teal-400' : mPct >= 35 ? 'text-amber-400' : 'text-coral-400';
+                  return (
+                    <div className={`bg-navy-800/40 border border-navy-600/20 rounded-md px-2 py-1.5 text-xs font-mono text-right ${cls}`}>
+                      {mPct.toFixed(1)}% <span className="text-fg/45">({mEur.toFixed(2)}€)</span>
+                    </div>
+                  );
+                })()}
+              </div>
+            </div>
+
             {/* Dates */}
             <div className="grid grid-cols-2 gap-3">
               <div>

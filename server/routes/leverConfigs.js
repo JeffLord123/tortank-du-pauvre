@@ -6,7 +6,10 @@ const router = Router();
 function toClient(row) {
   return {
     type: row.type,
+    label: row.label ?? undefined,
+    family: row.family ?? undefined,
     defaultCpm: row.default_cpm,
+    purchaseCpm: row.purchase_cpm ?? 0,
     minBudgetPerStore: row.min_budget_per_store,
     maxCoverage: row.max_coverage,
     color: row.color,
@@ -31,11 +34,14 @@ router.put('/:type', (req, res) => {
 
   const {
     defaultCpm,
+    purchaseCpm,
     minBudgetPerStore,
     maxCoverage,
     color,
     icon,
     autoBudgetPercent,
+    label,
+    family,
   } = req.body;
 
   let logo_url = row.logo_url;
@@ -44,7 +50,10 @@ router.put('/:type', (req, res) => {
   }
 
   db.prepare(`UPDATE lever_configs SET
+    label = COALESCE(@label, label),
+    family = COALESCE(@family, family),
     default_cpm = COALESCE(@defaultCpm, default_cpm),
+    purchase_cpm = COALESCE(@purchaseCpm, purchase_cpm),
     min_budget_per_store = COALESCE(@minBudgetPerStore, min_budget_per_store),
     max_coverage = COALESCE(@maxCoverage, max_coverage),
     color = COALESCE(@color, color),
@@ -54,12 +63,15 @@ router.put('/:type', (req, res) => {
     WHERE type = @type`)
     .run({
       type,
-      defaultCpm,
-      minBudgetPerStore,
-      maxCoverage,
-      color,
-      icon,
-      autoBudgetPercent,
+      label: label ?? null,
+      family: family ?? null,
+      defaultCpm: defaultCpm ?? null,
+      purchaseCpm: purchaseCpm ?? null,
+      minBudgetPerStore: minBudgetPerStore ?? null,
+      maxCoverage: maxCoverage ?? null,
+      color: color ?? null,
+      icon: icon ?? null,
+      autoBudgetPercent: autoBudgetPercent ?? null,
       logo_url,
     });
 

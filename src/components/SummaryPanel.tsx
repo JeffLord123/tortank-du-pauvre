@@ -3,8 +3,10 @@ import { createPortal } from 'react-dom';
 import { useSimulationStore } from '../store/simulationStore';
 import { useVersionStore } from '../store/versionStore';
 import { PieChart, Pie, Cell, ResponsiveContainer, Tooltip, BarChart, Bar, XAxis, YAxis, CartesianGrid } from 'recharts';
-import { TrendingUp, TrendingDown, Hash, Eye, Repeat, Layers, Store, Info, Sparkles, Target } from 'lucide-react';
+import { TrendingUp, TrendingDown, Hash, Eye, Repeat, Layers, Store, Info, Target, Percent, CheckCircle2, AlertTriangle } from 'lucide-react';
 import { formatNum, formatImpressions } from '../utils/formatNum';
+import { getMarginThreshold } from '../data/defaults';
+import NumInput from './NumInput';
 
 function CoverageKPI({ coverage, detail }: { coverage: number; detail: { name: string; coverage: number }[] }) {
   const [show, setShow] = useState(false);
@@ -167,7 +169,7 @@ function CoverageRepKPI({ coverage, avgRepetition, detail }: { coverage: number;
 }
 
 export default function SummaryPanel() {
-  const { simulation, activeHypothesisId, getHypothesisSummary } = useSimulationStore();
+  const { simulation, activeHypothesisId, getHypothesisSummary, updateHypothesis } = useSimulationStore();
   const activeVersion = useVersionStore(s => s.activeVersion);
 
   if (!simulation || !activeHypothesisId) return null;
@@ -192,7 +194,7 @@ export default function SummaryPanel() {
   const prestations = simulation.prestations ?? [];
   const prestationsBilled = prestations.reduce((s, p) => s + (p.offered ? 0 : p.price * (p.quantity ?? 1)), 0);
   const hasPrestations = prestations.length > 0;
-  const grandTotal = summary.totalBudget + prestationsBilled;
+  const grandTotal = leversBudgetUsed + prestationsBilled;
 
   return (
     <div className="space-y-4 animate-slide-in">
@@ -268,23 +270,20 @@ export default function SummaryPanel() {
         </div>
       )}
 
-      {/* Budget total avec prestas */}
-      {hasPrestations && (
-        <div className="glass-card p-3">
-          <div className="flex items-center gap-2 mb-1.5">
-            <div className="w-5 h-5 rounded-md bg-teal-400/15 flex items-center justify-center">
-              <Sparkles className="w-3 h-3 text-teal-400" />
-            </div>
-            <span className="text-[10px] uppercase tracking-wider text-fg/60">Budget total (avec prestas)</span>
-          </div>
-          <div className="flex items-baseline justify-between gap-2">
-            <span className="text-xl font-bold font-mono text-teal-400">{formatNum(grandTotal)}€</span>
-            <span className="text-[11px] text-fg/55 font-mono">
-              {formatNum(summary.totalBudget)}€ + {formatNum(prestationsBilled)}€ prestas
-            </span>
-          </div>
-        </div>
-      )}
+      {/* Récapitulatif marge */}
+      <MargeRecap
+        totalBudget={summary.totalBudget}
+        realBudget={leversBudgetUsed}
+        grandTotal={grandTotal}
+        prestationsBilled={prestationsBilled}
+        hasPrestations={hasPrestations}
+        retrocommissionPercent={hypothesis.retrocommissionPercent ?? 0}
+        onRetroChange={v => updateHypothesis(activeHypothesisId, { retrocommissionPercent: v })}
+        purchaseTotal={summary.purchaseTotal}
+        retrocommissionAmount={summary.retrocommissionAmount}
+        marginAmount={summary.marginAmount}
+        marginPercent={summary.marginPercent}
+      />
 
       {/* Store extremes */}
       <div className="glass-card p-3 space-y-2">
@@ -396,6 +395,132 @@ export default function SummaryPanel() {
       <div className="glass-card p-3 text-center">
         <span className="text-[10px] uppercase tracking-wider text-fg/60">Total impressions</span>
         <div className="text-xl font-bold font-mono text-teal-400 mt-1">{formatImpressions(totalImpressions)}</div>
+      </div>
+    </div>
+  );
+}
+
+function MargeRecap({
+  totalBudget,
+  realBudget,
+  grandTotal,
+  prestationsBilled,
+  hasPrestations,
+  retrocommissionPercent,
+  onRetroChange,
+  retrocommissionAmount,
+  marginAmount,
+  marginPercent,
+}: {
+  totalBudget: number;
+  realBudget: number;
+  grandTotal: number;
+  prestationsBilled: number;
+  hasPrestations: boolean;
+  retrocommissionPercent: number;
+  onRetroChange: (v: number) => void;
+  purchaseTotal: number;
+  retrocommissionAmount: number;
+  marginAmount: number;
+  marginPercent: number;
+}) {
+  const threshold = getMarginThreshold(grandTotal);
+  const ok = marginPercent >= threshold.minMarginPercent;
+  const clamped = Math.max(0, Math.min(100, marginPercent));
+  const barColor = ok ? 'from-indigo-500 via-teal-400 to-teal-400' : 'from-coral-400 via-amber-400 to-amber-500';
+
+  return (
+    <div className="glass-card p-4 space-y-4">
+      <div className="flex items-center justify-between">
+        <span className="text-xs font-semibold uppercase tracking-wider text-fg/72">Récapitulatif</span>
+      </div>
+
+      <div>
+        <span className="text-[10px] uppercase tracking-wider text-fg/60 block mb-1">
+          Budget total (avec prestas)
+        </span>
+        <span className="text-2xl font-bold font-mono text-teal-400">{formatNum(grandTotal)} €</span>
+        {hasPrestations && (
+          <span className="text-[11px] text-fg/55 font-mono block mt-0.5">
+            {formatNum(realBudget)}€ + {formatNum(prestationsBilled)}€ prestas
+          </span>
+        )}
+      </div>
+
+      <div className="border-t border-fg/10 pt-3">
+        <span className="text-[10px] uppercase tracking-wider text-fg/60 block mb-1.5">
+          Rétrocommission <span className="text-fg/45 normal-case">(optionnel)</span>
+        </span>
+        <div className="flex items-center gap-2">
+          <div className="relative w-24">
+            <NumInput
+              value={retrocommissionPercent}
+              onChange={onRetroChange}
+              min={0}
+              max={100}
+              step={0.1}
+              className="w-full bg-navy-800/60 border border-navy-600/30 rounded-lg px-3 py-2 pr-7 text-sm text-fg font-mono focus:outline-none focus:border-teal-400/40 transition-colors"
+            />
+            <Percent className="w-3.5 h-3.5 text-fg/45 absolute right-2 top-1/2 -translate-y-1/2 pointer-events-none" />
+          </div>
+          <span className="text-sm text-fg/60 font-mono">− {formatNum(retrocommissionAmount)} €</span>
+        </div>
+      </div>
+
+      <div className="border-t border-fg/10 pt-3">
+        <span className="text-[10px] uppercase tracking-wider text-fg/60 block mb-1">Marge totale</span>
+        <span className={`text-2xl font-bold font-mono ${ok ? 'text-teal-400' : 'text-coral-400'}`}>
+          {formatNum(Math.round(marginAmount))} €
+        </span>
+        <p className="text-[10px] text-fg/45 mt-0.5">valeur absolue</p>
+      </div>
+
+      <div className="border-t border-fg/10 pt-3">
+        <span className="text-[10px] uppercase tracking-wider text-fg/60 block mb-1">Marge en pourcentage</span>
+        <span className={`text-2xl font-bold font-mono ${ok ? 'text-teal-400' : 'text-coral-400'}`}>
+          {marginPercent.toFixed(2)} %
+        </span>
+        <div className="mt-2 h-2 rounded-full bg-navy-800/60 overflow-hidden relative">
+          <div
+            className={`h-full bg-gradient-to-r ${barColor} transition-all`}
+            style={{ width: `${clamped}%` }}
+          />
+          {/* Threshold marker */}
+          <div
+            className="absolute top-0 bottom-0 w-px bg-fg/60"
+            style={{ left: `${Math.min(100, threshold.minMarginPercent)}%` }}
+            title={`Seuil ${threshold.minMarginPercent}% (${threshold.label})`}
+          />
+        </div>
+      </div>
+
+      <div
+        className={`flex items-start gap-2 rounded-lg px-3 py-2.5 border ${
+          ok
+            ? 'bg-teal-400/10 border-teal-400/30 text-[#0b2e1a]'
+            : 'bg-coral-400/10 border-coral-400/30 text-[#3a0f0f]'
+        }`}
+      >
+        {ok ? (
+          <CheckCircle2 className="w-4 h-4 shrink-0 mt-0.5" />
+        ) : (
+          <AlertTriangle className="w-4 h-4 shrink-0 mt-0.5" />
+        )}
+        <div className="text-[13px] leading-relaxed">
+          {ok ? (
+            <>
+              <span className="font-bold">OK</span> — marge au-dessus du seuil de{' '}
+              <span className="font-bold">{threshold.minMarginPercent.toFixed(2)} %</span>{' '}
+              <span className="opacity-80">({threshold.label})</span>
+            </>
+          ) : (
+            <>
+              <span className="font-bold">Validation requise</span> — marge sous le seuil de{' '}
+              <span className="font-bold">{threshold.minMarginPercent.toFixed(2)} %</span>{' '}
+              <span className="opacity-80">({threshold.label})</span>. Accord de Thomas, Nico N ou Nico G nécessaire.
+            </>
+          )}
+        </div>
       </div>
     </div>
   );

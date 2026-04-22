@@ -12,8 +12,9 @@ export default function PrestationsPanel() {
   const addPrestation = useSimulationStore(s => s.addPrestation);
   const removePrestation = useSimulationStore(s => s.removePrestation);
 
-  const [open, setOpen] = useState(false);
+  const [open, setOpen] = useState(() => localStorage.getItem('prestationsPanel.open') === 'true');
   const [selected, setSelected] = useState<string>('');
+  const [category, setCategory] = useState('');
   const [name, setName] = useState('');
   const [quantity, setQuantity] = useState(1);
   const [productionCost, setProductionCost] = useState(0);
@@ -32,6 +33,7 @@ export default function PrestationsPanel() {
 
   const resetForm = () => {
     setSelected('');
+    setCategory('');
     setName('');
     setQuantity(1);
     setProductionCost(0);
@@ -52,7 +54,9 @@ export default function PrestationsPanel() {
       for (const item of group.items) {
         const key = `${group.label}::${item.name}`;
         if (key === value) {
+          setCategory(group.label);
           setName(item.name);
+          setProductionCost(item.productionCost);
           setPrice(item.price);
           return;
         }
@@ -64,6 +68,7 @@ export default function PrestationsPanel() {
     if (!canSubmit) return;
     addPrestation({
       name: name.trim(),
+      category: category || undefined,
       quantity: Math.max(1, quantity),
       productionCost,
       price: offered ? 0 : price,
@@ -75,7 +80,7 @@ export default function PrestationsPanel() {
   return (
     <div className="glass-card overflow-hidden">
       <button
-        onClick={() => setOpen(o => !o)}
+        onClick={() => setOpen(o => { const next = !o; localStorage.setItem('prestationsPanel.open', String(next)); return next; })}
         className="w-full flex items-center justify-between px-4 py-3 hover:bg-fg/[0.04] transition-colors"
       >
         <span className="flex items-center gap-2 text-sm font-semibold text-fg">
@@ -230,8 +235,13 @@ export default function PrestationsPanel() {
                   className="flex items-center justify-between gap-3 bg-navy-800/40 border border-fg/8 rounded-lg px-3 py-2.5 hover:border-fg/15 transition-colors"
                 >
                   <div className="min-w-0 flex-1">
-                    <div className="flex items-center gap-2">
+                    <div className="flex items-center gap-2 flex-wrap">
                       <span className="text-sm font-semibold text-fg truncate">{p.name}</span>
+                      {p.category && (
+                        <span className="text-[10px] bg-navy-700/80 text-fg/60 px-1.5 py-0.5 rounded-full border border-fg/10 font-medium whitespace-nowrap">
+                          {p.category}
+                        </span>
+                      )}
                       {p.offered && (
                         <span className="text-[10px] bg-teal-400/15 text-teal-400 px-1.5 py-0.5 rounded-full font-medium">
                           Offert

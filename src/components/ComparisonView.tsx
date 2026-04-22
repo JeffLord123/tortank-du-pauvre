@@ -4,7 +4,7 @@ import { useSimulationStore, type HypothesisSummary } from '../store/simulationS
 import { LEVER_CONFIGS } from '../data/defaults';
 import LeverLogoBadge from './LeverLogoBadge';
 import { BarChart, Bar, XAxis, YAxis, ResponsiveContainer, Tooltip, Legend } from 'recharts';
-import { GitCompareArrows, Eye, Repeat, DollarSign, Layers, ArrowUp, ArrowDown, Minus, Info } from 'lucide-react';
+import { GitCompareArrows, Eye, Repeat, DollarSign, Layers, ArrowUp, ArrowDown, Minus, Info, Plus, Percent, TrendingUp } from 'lucide-react';
 import { formatNum } from '../utils/formatNum';
 
 function CoverageCell({ summary }: { summary: HypothesisSummary }) {
@@ -149,10 +149,10 @@ export default function ComparisonView() {
               </tr>
             </thead>
             <tbody>
-              {/* Budget */}
+              {/* Objectif budget */}
               <tr className="border-b border-fg/[0.09] hover:bg-fg/[0.06]">
                 <td className="px-4 py-2.5 text-fg/82 flex items-center gap-2">
-                  <DollarSign className="w-3 h-3" /> Budget total
+                  <DollarSign className="w-3 h-3" /> Objectif budget
                 </td>
                 {summaries.map((s, i) => (
                   <td key={i} className="text-right px-4 py-2.5 font-mono">
@@ -162,6 +162,79 @@ export default function ComparisonView() {
                 {showDiffColumn && summaries.length >= 2 && summaries[0] && summaries[1] && (
                   <td className="text-right px-4 py-2.5">
                     <DiffBadge a={summaries[0].totalBudget} b={summaries[1].totalBudget} suffix="€" />
+                  </td>
+                )}
+              </tr>
+
+              {/* Prestas addi. */}
+              <tr className="border-b border-fg/[0.09] hover:bg-fg/[0.06]">
+                <td className="px-4 py-2.5 text-fg/82 flex items-center gap-2">
+                  <Plus className="w-3 h-3" /> Prestas addi.
+                </td>
+                {summaries.map((s, i) => (
+                  <td key={i} className="text-right px-4 py-2.5 font-mono">
+                    {s ? `${formatNum(s.prestationsSaleTotal)}€` : '-'}
+                  </td>
+                ))}
+                {showDiffColumn && summaries.length >= 2 && summaries[0] && summaries[1] && (
+                  <td className="text-right px-4 py-2.5">
+                    <DiffBadge a={summaries[0].prestationsSaleTotal} b={summaries[1].prestationsSaleTotal} suffix="€" />
+                  </td>
+                )}
+              </tr>
+
+              {/* Budget total avec prestas */}
+              <tr className="border-b border-fg/[0.09] hover:bg-fg/[0.06] bg-fg/[0.03]">
+                <td className="px-4 py-2.5 text-fg/90 font-medium flex items-center gap-2">
+                  <DollarSign className="w-3 h-3 text-teal-400" /> Budget total avec prestas
+                </td>
+                {summaries.map((s, i) => (
+                  <td key={i} className="text-right px-4 py-2.5 font-mono font-semibold text-teal-400">
+                    {s ? `${formatNum(s.grandTotal)}€` : '-'}
+                  </td>
+                ))}
+                {showDiffColumn && summaries.length >= 2 && summaries[0] && summaries[1] && (
+                  <td className="text-right px-4 py-2.5">
+                    <DiffBadge a={summaries[0].grandTotal} b={summaries[1].grandTotal} suffix="€" />
+                  </td>
+                )}
+              </tr>
+
+              {/* Rétrocom % */}
+              <tr className="border-b border-fg/[0.09] hover:bg-fg/[0.06]">
+                <td className="px-4 py-2.5 text-fg/82 flex items-center gap-2">
+                  <Percent className="w-3 h-3" /> Rétrocom
+                </td>
+                {summaries.map((s, i) => (
+                  <td key={i} className="text-right px-4 py-2.5 font-mono">
+                    {s ? `${s.retrocommissionPercent.toFixed(1)}%` : '-'}
+                  </td>
+                ))}
+                {showDiffColumn && summaries.length >= 2 && summaries[0] && summaries[1] && (
+                  <td className="text-right px-4 py-2.5">
+                    <DiffBadge a={summaries[0].retrocommissionPercent} b={summaries[1].retrocommissionPercent} suffix="%" />
+                  </td>
+                )}
+              </tr>
+
+              {/* Marge */}
+              <tr className="border-b border-fg/[0.09] hover:bg-fg/[0.06]">
+                <td className="px-4 py-2.5 text-fg/82 flex items-center gap-2">
+                  <TrendingUp className="w-3 h-3" /> Marge
+                </td>
+                {summaries.map((s, i) => (
+                  <td key={i} className="text-right px-4 py-2.5 font-mono">
+                    {s ? (
+                      <span className={s.marginAmount >= 0 ? 'text-teal-400' : 'text-red-400'}>
+                        {formatNum(Math.round(s.marginAmount))}€
+                        <span className="text-[10px] text-fg/65 ml-1">({s.marginPercent.toFixed(1)}%)</span>
+                      </span>
+                    ) : '-'}
+                  </td>
+                ))}
+                {showDiffColumn && summaries.length >= 2 && summaries[0] && summaries[1] && (
+                  <td className="text-right px-4 py-2.5">
+                    <DiffBadge a={summaries[0].marginAmount} b={summaries[1].marginAmount} suffix="€" />
                   </td>
                 )}
               </tr>

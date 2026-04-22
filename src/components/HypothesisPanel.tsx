@@ -934,22 +934,48 @@ function HypothesisCard({ hypothesis, isActive }: HypothesisCardProps) {
                   </button>
 
                   {showAddLever && (
-                    <div className="absolute bottom-full left-0 right-0 mb-2 z-20 bg-navy-800 border border-navy-600/50 rounded-lg shadow-2xl p-2 animate-fade-in">
-                      <div className="grid grid-cols-2 gap-1">
-                        {availableLevers.map(type => {
-                          const cfg = leverConfigs[type] ?? LEVER_CONFIGS[type];
-                          return (
-                            <button
-                              key={type}
-                              onClick={() => handleAddLever(type)}
-                              className="flex items-center gap-2 px-3 py-2 rounded-md text-xs hover:bg-fg/10 transition-colors group"
-                            >
-                              <LeverLogoBadge cfg={cfg} className="w-6 h-6" iconClassName="w-3.5 h-3.5" />
-                              <span className="text-fg/88 group-hover:text-fg">{type}</span>
-                            </button>
-                          );
-                        })}
-                      </div>
+                    <div className="absolute bottom-full left-0 right-0 mb-2 z-20 bg-navy-800 border border-navy-600/50 rounded-lg shadow-2xl p-2 animate-fade-in max-h-[320px] overflow-y-auto">
+                      {(() => {
+                        const grouped: Record<string, string[]> = {};
+                        for (const t of availableLevers) {
+                          const cfg = leverConfigs[t] ?? LEVER_CONFIGS[t];
+                          const fam = cfg?.family || 'Autres';
+                          (grouped[fam] ??= []).push(t);
+                        }
+                        const familyOrder = ['Display Mobile', 'Meta', 'CTV', 'VOL', 'DOOH', 'Google', 'Audio', 'Legacy', 'Autres'];
+                        const fams = Object.keys(grouped).sort((a, b) => {
+                          const ia = familyOrder.indexOf(a); const ib = familyOrder.indexOf(b);
+                          return (ia === -1 ? 999 : ia) - (ib === -1 ? 999 : ib);
+                        });
+                        return fams.map(fam => (
+                          <div key={fam} className="mb-1 last:mb-0">
+                            <div className="text-[9px] uppercase tracking-wider text-fg/45 px-2 pt-1.5 pb-1">{fam}</div>
+                            <div className="grid grid-cols-2 gap-1">
+                              {grouped[fam].map(type => {
+                                const cfg = leverConfigs[type] ?? LEVER_CONFIGS[type];
+                                const m = cfg && cfg.defaultCpm > 0
+                                  ? ((cfg.defaultCpm - (cfg.purchaseCpm ?? 0)) / cfg.defaultCpm) * 100
+                                  : 0;
+                                return (
+                                  <button
+                                    key={type}
+                                    onClick={() => handleAddLever(type)}
+                                    className="flex items-center gap-2 px-3 py-2 rounded-md text-xs hover:bg-fg/10 transition-colors group"
+                                  >
+                                    <LeverLogoBadge cfg={cfg} className="w-6 h-6" iconClassName="w-3.5 h-3.5" />
+                                    <span className="flex-1 text-left text-fg/88 group-hover:text-fg truncate">
+                                      {cfg?.label || type}
+                                    </span>
+                                    {cfg && cfg.purchaseCpm > 0 && (
+                                      <span className="text-[9px] text-fg/50 font-mono shrink-0">{m.toFixed(0)}%</span>
+                                    )}
+                                  </button>
+                                );
+                              })}
+                            </div>
+                          </div>
+                        ));
+                      })()}
                     </div>
                   )}
                 </div>

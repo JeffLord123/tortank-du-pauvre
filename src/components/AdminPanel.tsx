@@ -346,19 +346,41 @@ export default function AdminPanel() {
                   const t = type as LeverType;
                   const cfg = leverConfigs[t];
                   if (!cfg) return null;
+                  const margin = cfg.defaultCpm > 0 ? ((cfg.defaultCpm - (cfg.purchaseCpm ?? 0)) / cfg.defaultCpm) * 100 : 0;
+                  const marginEuro = cfg.defaultCpm - (cfg.purchaseCpm ?? 0);
                   return (
                     <div key={t} className="glass-card p-4 space-y-3">
-                      <div className="flex items-center gap-2">
+                      <div className="flex items-center gap-2 flex-wrap">
                         <div className="w-3 h-3 rounded-full" style={{ backgroundColor: cfg.color }} />
-                        <span className="text-sm font-semibold">{t}</span>
+                        <span className="text-sm font-semibold">{cfg.label || t}</span>
+                        {cfg.family && (
+                          <span className="text-[10px] px-1.5 py-0.5 rounded-full bg-navy-700 text-fg/60">{cfg.family}</span>
+                        )}
+                        <span className="ml-auto text-[11px] font-mono">
+                          Marge&nbsp;
+                          <span className={margin >= 40 ? 'text-teal-400 font-semibold' : margin >= 35 ? 'text-amber-400 font-semibold' : 'text-coral-400 font-semibold'}>
+                            {margin.toFixed(1)}%
+                          </span>
+                          <span className="text-fg/45"> · {marginEuro.toFixed(2)}€</span>
+                        </span>
                       </div>
 
                       <div className="grid grid-cols-2 sm:grid-cols-3 gap-3">
                         <div>
-                          <label className="text-[10px] uppercase tracking-wider text-fg/60 mb-1 block">CPM par défaut (€)</label>
+                          <label className="text-[10px] uppercase tracking-wider text-fg/60 mb-1 block">CPM vente (€)</label>
                           <PlainNumericInput
                             value={cfg.defaultCpm}
                             onChange={v => updateLeverConfig(t, { defaultCpm: v })}
+                            min={0}
+                            step={0.1}
+                            className={inputClass}
+                          />
+                        </div>
+                        <div>
+                          <label className="text-[10px] uppercase tracking-wider text-fg/60 mb-1 block">CPM achat (€)</label>
+                          <PlainNumericInput
+                            value={cfg.purchaseCpm ?? 0}
+                            onChange={v => updateLeverConfig(t, { purchaseCpm: v })}
                             min={0}
                             step={0.1}
                             className={inputClass}
@@ -628,26 +650,29 @@ export default function AdminPanel() {
                   <thead>
                     <tr className="text-fg/60 text-left">
                       <th className="pb-2 font-medium">Levier</th>
-                      <th className="pb-2 font-medium">CPM</th>
+                      <th className="pb-2 font-medium">Vente</th>
+                      <th className="pb-2 font-medium">Achat</th>
+                      <th className="pb-2 font-medium">Marge</th>
                       <th className="pb-2 font-medium">Min/mag</th>
                       <th className="pb-2 font-medium">Couv. max</th>
-                      <th className="pb-2 font-medium">Auto %</th>
                     </tr>
                   </thead>
                   <tbody className="text-fg/88">
                     {LEVER_TYPES.map(type => {
                       const cfg = leverConfigs[type];
                       if (!cfg) return null;
+                      const margin = cfg.defaultCpm > 0 ? ((cfg.defaultCpm - (cfg.purchaseCpm ?? 0)) / cfg.defaultCpm) * 100 : 0;
                       return (
                         <tr key={type} className="border-t border-fg/12">
                           <td className="py-2 flex items-center gap-2">
                             <div className="w-2 h-2 rounded-full" style={{ backgroundColor: cfg.color }} />
-                            {type}
+                            {cfg.label || type}
                           </td>
                           <td className="py-2">{cfg.defaultCpm.toFixed(2)}€</td>
+                          <td className="py-2">{(cfg.purchaseCpm ?? 0).toFixed(2)}€</td>
+                          <td className={`py-2 font-semibold ${margin >= 40 ? 'text-teal-400' : margin >= 35 ? 'text-amber-400' : 'text-coral-400'}`}>{margin.toFixed(1)}%</td>
                           <td className="py-2">{cfg.minBudgetPerStore}€</td>
                           <td className="py-2">{cfg.maxCoverage}%</td>
-                          <td className="py-2">{cfg.autoBudgetPercent}%</td>
                         </tr>
                       );
                     })}

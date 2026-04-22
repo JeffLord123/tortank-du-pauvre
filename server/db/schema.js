@@ -14,12 +14,16 @@ export function initDB() {
 
     CREATE TABLE IF NOT EXISTS lever_configs (
       type                 TEXT PRIMARY KEY,
+      label                TEXT,
+      family               TEXT,
       default_cpm          REAL    NOT NULL,
+      purchase_cpm         REAL    NOT NULL DEFAULT 0,
       min_budget_per_store INTEGER NOT NULL,
       max_coverage         INTEGER NOT NULL,
       color                TEXT    NOT NULL,
       icon                 TEXT    NOT NULL,
-      auto_budget_percent  INTEGER NOT NULL
+      auto_budget_percent  INTEGER NOT NULL,
+      logo_url             TEXT
     );
 
     CREATE TABLE IF NOT EXISTS stores (
@@ -45,6 +49,7 @@ export function initDB() {
       preset_id            TEXT NOT NULL REFERENCES presets(id) ON DELETE CASCADE,
       type                 TEXT NOT NULL,
       cpm                  REAL    NOT NULL DEFAULT 0,
+      purchase_cpm         REAL    NOT NULL DEFAULT 0,
       min_budget_per_store INTEGER NOT NULL DEFAULT 0,
       budget               REAL    NOT NULL DEFAULT 0,
       budget_percent       REAL    NOT NULL DEFAULT 0,
@@ -75,6 +80,7 @@ export function initDB() {
       objective_mode       TEXT NOT NULL DEFAULT 'budget',
       budget_mode          TEXT NOT NULL DEFAULT 'automatique',
       total_budget         REAL NOT NULL DEFAULT 0,
+      retrocommission_percent REAL NOT NULL DEFAULT 0,
       collapsed            INTEGER NOT NULL DEFAULT 0,
       sort_order           INTEGER NOT NULL DEFAULT 0
     );
@@ -84,6 +90,7 @@ export function initDB() {
       hypothesis_id        TEXT NOT NULL REFERENCES hypotheses(id) ON DELETE CASCADE,
       type                 TEXT NOT NULL,
       cpm                  REAL    NOT NULL DEFAULT 0,
+      purchase_cpm         REAL    NOT NULL DEFAULT 0,
       min_budget_per_store REAL    NOT NULL DEFAULT 0,
       budget               REAL    NOT NULL DEFAULT 0,
       budget_percent       REAL    NOT NULL DEFAULT 0,
@@ -95,6 +102,18 @@ export function initDB() {
       end_date             TEXT    NOT NULL DEFAULT '',
       collapsed            INTEGER NOT NULL DEFAULT 0,
       sort_order           INTEGER NOT NULL DEFAULT 0
+    );
+
+    CREATE TABLE IF NOT EXISTS prestations (
+      id              TEXT PRIMARY KEY,
+      simulation_id   TEXT NOT NULL REFERENCES simulations(id) ON DELETE CASCADE,
+      name            TEXT NOT NULL DEFAULT '',
+      category        TEXT,
+      quantity        INTEGER NOT NULL DEFAULT 1,
+      production_cost REAL NOT NULL DEFAULT 0,
+      price           REAL NOT NULL DEFAULT 0,
+      offered         INTEGER NOT NULL DEFAULT 0,
+      sort_order      INTEGER NOT NULL DEFAULT 0
     );
 
     CREATE TABLE IF NOT EXISTS excel_uploads (
@@ -129,22 +148,62 @@ export function initDB() {
   try { db.exec(`ALTER TABLE presets ADD COLUMN sort_order INTEGER NOT NULL DEFAULT 0`); } catch {}
   try { db.exec(`ALTER TABLE presets ADD COLUMN total_budget REAL`); } catch {}
   try { db.exec(`ALTER TABLE presets ADD COLUMN max_budget_per_store REAL`); } catch {}
+  try { db.exec(`ALTER TABLE lever_configs ADD COLUMN purchase_cpm REAL NOT NULL DEFAULT 0`); } catch {}
+  try { db.exec(`ALTER TABLE lever_configs ADD COLUMN label TEXT`); } catch {}
+  try { db.exec(`ALTER TABLE lever_configs ADD COLUMN family TEXT`); } catch {}
+  try { db.exec(`ALTER TABLE levers ADD COLUMN purchase_cpm REAL NOT NULL DEFAULT 0`); } catch {}
+  try { db.exec(`ALTER TABLE preset_levers ADD COLUMN purchase_cpm REAL NOT NULL DEFAULT 0`); } catch {}
+  try { db.exec(`ALTER TABLE hypotheses ADD COLUMN retrocommission_percent REAL NOT NULL DEFAULT 0`); } catch {}
 
   // ── Seed initial data ─────────────────────────────────────────
   db.prepare(`INSERT OR IGNORE INTO global_params (id, default_population, max_budget_per_store, default_total_budget, max_budget_slider, max_repetition_slider) VALUES (1, 140000, 50000, 500000, 500000, 10)`).run();
 
   const seedLeverConfigs = [
-    { type: 'Display',   default_cpm: 4.50, min_budget_per_store: 120, max_coverage: 65, color: '#00e5a0', icon: 'Monitor',  auto_budget_percent: 20 },
-    { type: 'Desktop',   default_cpm: 5.00, min_budget_per_store: 100, max_coverage: 55, color: '#00b4d8', icon: 'Laptop',   auto_budget_percent: 10 },
-    { type: 'Meta',      default_cpm: 6.20, min_budget_per_store: 150, max_coverage: 75, color: '#667eea', icon: 'Facebook', auto_budget_percent: 25 },
-    { type: 'Google',    default_cpm: 7.80, min_budget_per_store: 200, max_coverage: 70, color: '#f59e0b', icon: 'Search',   auto_budget_percent: 20 },
-    { type: 'Youtube',   default_cpm: 8.50, min_budget_per_store: 250, max_coverage: 60, color: '#ef4444', icon: 'Youtube',  auto_budget_percent: 10 },
-    { type: 'Snap',      default_cpm: 5.50, min_budget_per_store: 100, max_coverage: 45, color: '#fbbf24', icon: 'Ghost',    auto_budget_percent: 5  },
-    { type: 'Pinterest', default_cpm: 3.80, min_budget_per_store: 80,  max_coverage: 35, color: '#ec4899', icon: 'Pin',      auto_budget_percent: 5  },
-    { type: 'TikTok',    default_cpm: 6.00, min_budget_per_store: 130, max_coverage: 55, color: '#06b6d4', icon: 'Music',    auto_budget_percent: 5  },
+    // Legacy
+    { type: 'Display',   label: 'Display',   family: 'Legacy', default_cpm: 4.50, purchase_cpm: 0,    min_budget_per_store: 120, max_coverage: 65, color: '#00e5a0', icon: 'Monitor',  auto_budget_percent: 20 },
+    { type: 'Desktop',   label: 'Desktop',   family: 'Legacy', default_cpm: 5.00, purchase_cpm: 0,    min_budget_per_store: 100, max_coverage: 55, color: '#00b4d8', icon: 'Laptop',   auto_budget_percent: 10 },
+    { type: 'Meta',      label: 'Meta',      family: 'Legacy', default_cpm: 6.20, purchase_cpm: 0,    min_budget_per_store: 150, max_coverage: 75, color: '#667eea', icon: 'Facebook', auto_budget_percent: 25 },
+    { type: 'Google',    label: 'Google',    family: 'Legacy', default_cpm: 7.80, purchase_cpm: 0,    min_budget_per_store: 200, max_coverage: 70, color: '#f59e0b', icon: 'Search',   auto_budget_percent: 20 },
+    { type: 'Youtube',   label: 'Youtube',   family: 'Legacy', default_cpm: 8.50, purchase_cpm: 0,    min_budget_per_store: 250, max_coverage: 60, color: '#ef4444', icon: 'Youtube',  auto_budget_percent: 10 },
+    { type: 'Snap',      label: 'Snap',      family: 'Legacy', default_cpm: 5.50, purchase_cpm: 0,    min_budget_per_store: 100, max_coverage: 45, color: '#fbbf24', icon: 'Ghost',    auto_budget_percent: 5  },
+    { type: 'Pinterest', label: 'Pinterest', family: 'Legacy', default_cpm: 3.80, purchase_cpm: 0,    min_budget_per_store: 80,  max_coverage: 35, color: '#ec4899', icon: 'Pin',      auto_budget_percent: 5  },
+    { type: 'TikTok',    label: 'TikTok',    family: 'Legacy', default_cpm: 6.00, purchase_cpm: 0,    min_budget_per_store: 130, max_coverage: 55, color: '#06b6d4', icon: 'Music',    auto_budget_percent: 5  },
+
+    // Ratecard Mobsuccess — Display Mobile
+    { type: 'DisplayMobile-Interstitiel', label: 'Interstitiel',         family: 'Display Mobile', default_cpm: 11.00, purchase_cpm: 5.00,  min_budget_per_store: 120, max_coverage: 65, color: '#00e5a0', icon: 'Monitor', auto_budget_percent: 15 },
+    { type: 'DisplayMobile-Pave',         label: 'Pavé',                 family: 'Display Mobile', default_cpm: 5.00,  purchase_cpm: 2.00,  min_budget_per_store: 120, max_coverage: 65, color: '#00c48c', icon: 'Monitor', auto_budget_percent: 5  },
+    { type: 'DisplayMobile-Banner',       label: 'Banner',               family: 'Display Mobile', default_cpm: 2.50,  purchase_cpm: 1.00,  min_budget_per_store: 120, max_coverage: 65, color: '#00a775', icon: 'Monitor', auto_budget_percent: 5  },
+    { type: 'DisplayMobile-Mixed',        label: 'Mixed format',         family: 'Display Mobile', default_cpm: 9.00,  purchase_cpm: 3.25,  min_budget_per_store: 120, max_coverage: 65, color: '#00e5a0', icon: 'Monitor', auto_budget_percent: 15 },
+
+    // Meta
+    { type: 'Meta-Reach',  label: 'Reach',        family: 'Meta', default_cpm: 2.00, purchase_cpm: 0.80, min_budget_per_store: 150, max_coverage: 75, color: '#667eea', icon: 'Facebook', auto_budget_percent: 15 },
+    { type: 'Meta-Trafic', label: 'Trafic',       family: 'Meta', default_cpm: 5.00, purchase_cpm: 3.00, min_budget_per_store: 150, max_coverage: 75, color: '#7c8eec', icon: 'Facebook', auto_budget_percent: 5  },
+    { type: 'Meta-Mixed',  label: 'Mixed format', family: 'Meta', default_cpm: 4.00, purchase_cpm: 1.90, min_budget_per_store: 150, max_coverage: 75, color: '#667eea', icon: 'Facebook', auto_budget_percent: 15 },
+
+    // CTV
+    { type: 'CTV-Mixed',           label: 'Mixed format',           family: 'CTV', default_cpm: 16.00, purchase_cpm: 9.33,  min_budget_per_store: 300, max_coverage: 55, color: '#a855f7', icon: 'Tv', auto_budget_percent: 10 },
+    { type: 'CTV-BroadcasterOnly', label: 'Mixed Broadcaster only', family: 'CTV', default_cpm: 20.00, purchase_cpm: 12.00, min_budget_per_store: 300, max_coverage: 55, color: '#c084fc', icon: 'Tv', auto_budget_percent: 5  },
+
+    // VOL
+    { type: 'VOL-Mixed', label: 'Mixed format', family: 'VOL', default_cpm: 10.00, purchase_cpm: 4.50, min_budget_per_store: 200, max_coverage: 60, color: '#ef4444', icon: 'Youtube', auto_budget_percent: 10 },
+
+    // DOOH
+    { type: 'DOOH-Mixed', label: 'Mixed format', family: 'DOOH', default_cpm: 22.00, purchase_cpm: 10.00, min_budget_per_store: 500, max_coverage: 50, color: '#f59e0b', icon: 'Monitor', auto_budget_percent: 5 },
+
+    // Google
+    { type: 'Google-PMAX',      label: 'PMAX',       family: 'Google', default_cpm: 3.00, purchase_cpm: 1.60, min_budget_per_store: 200, max_coverage: 70, color: '#f59e0b', icon: 'Search', auto_budget_percent: 10 },
+    { type: 'Google-DemandGen', label: 'Demand Gen', family: 'Google', default_cpm: 3.50, purchase_cpm: 1.90, min_budget_per_store: 200, max_coverage: 70, color: '#fbbf24', icon: 'Search', auto_budget_percent: 10 },
+
+    // Audio
+    { type: 'Audio-Mixed', label: 'Mixed format', family: 'Audio', default_cpm: 20.00, purchase_cpm: 10.00, min_budget_per_store: 200, max_coverage: 40, color: '#06b6d4', icon: 'Music', auto_budget_percent: 5 },
   ];
-  const insertConfig = db.prepare(`INSERT OR IGNORE INTO lever_configs (type, default_cpm, min_budget_per_store, max_coverage, color, icon, auto_budget_percent) VALUES (@type, @default_cpm, @min_budget_per_store, @max_coverage, @color, @icon, @auto_budget_percent)`);
-  for (const cfg of seedLeverConfigs) insertConfig.run(cfg);
+  const insertConfig = db.prepare(`INSERT OR IGNORE INTO lever_configs (type, label, family, default_cpm, purchase_cpm, min_budget_per_store, max_coverage, color, icon, auto_budget_percent) VALUES (@type, @label, @family, @default_cpm, @purchase_cpm, @min_budget_per_store, @max_coverage, @color, @icon, @auto_budget_percent)`);
+  const backfillPurchaseCpm = db.prepare(`UPDATE lever_configs SET purchase_cpm = @purchase_cpm, label = COALESCE(label, @label), family = COALESCE(family, @family) WHERE type = @type AND (purchase_cpm = 0 OR purchase_cpm IS NULL)`);
+  for (const cfg of seedLeverConfigs) {
+    insertConfig.run(cfg);
+    // Backfill purchase_cpm for rows inserted before this column existed.
+    backfillPurchaseCpm.run(cfg);
+  }
 
   // Feu Vert — 331 magasins (populations estimées par aire urbaine)
   const seedStores = [
