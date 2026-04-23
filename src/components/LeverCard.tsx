@@ -117,44 +117,6 @@ export default function LeverCard({ lever, hypothesis, index }: Props) {
       <div className={`collapse-transition ${lever.collapsed ? '' : 'open'}`}>
         <div>
           <div className="px-4 pb-4 space-y-4 border-t border-fg/12 pt-4">
-            {/* CPM vente & achat */}
-            <div className="grid grid-cols-3 gap-3">
-              <div>
-                <label className="text-[10px] uppercase tracking-wider text-fg/60 mb-1 block">CPM vente (€)</label>
-                <NumInput
-                  value={lever.cpm}
-                  onChange={v => updateLever(hypothesis.id, lever.id, { cpm: v })}
-                  min={0}
-                  step={0.1}
-                  className="w-full bg-navy-800/60 border border-navy-600/30 rounded-md px-2 py-1.5 text-xs font-mono text-fg focus:outline-none focus:border-teal-400/40 transition-colors"
-                />
-              </div>
-              <div>
-                <label className="text-[10px] uppercase tracking-wider text-fg/60 mb-1 block">CPM achat (€)</label>
-                <NumInput
-                  value={lever.purchaseCpm ?? 0}
-                  onChange={v => updateLever(hypothesis.id, lever.id, { purchaseCpm: v })}
-                  min={0}
-                  step={0.1}
-                  className="w-full bg-navy-800/60 border border-navy-600/30 rounded-md px-2 py-1.5 text-xs font-mono text-fg focus:outline-none focus:border-teal-400/40 transition-colors"
-                />
-              </div>
-              <div>
-                <label className="text-[10px] uppercase tracking-wider text-fg/60 mb-1 block">Marge</label>
-                {(() => {
-                  const purchase = lever.purchaseCpm ?? 0;
-                  const mPct = lever.cpm > 0 ? ((lever.cpm - purchase) / lever.cpm) * 100 : 0;
-                  const mEur = lever.cpm - purchase;
-                  const cls = mPct >= 40 ? 'text-teal-400' : mPct >= 35 ? 'text-amber-400' : 'text-coral-400';
-                  return (
-                    <div className={`bg-navy-800/40 border border-navy-600/20 rounded-md px-2 py-1.5 text-xs font-mono text-right ${cls}`}>
-                      {mPct.toFixed(1)}% <span className="text-fg/45">({mEur.toFixed(2)}€)</span>
-                    </div>
-                  );
-                })()}
-              </div>
-            </div>
-
             {/* Dates */}
             <div className="grid grid-cols-2 gap-3">
               <div>

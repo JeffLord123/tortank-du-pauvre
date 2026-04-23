@@ -330,10 +330,10 @@ function recalcHypothesis(h: Hypothesis, _simStart: string, _simEnd: string, con
       if (config && totalPercent > 0) {
         // Répet fixée par les dates de campagne du levier
         const weeks = Math.max(1, Math.round((new Date(lever.endDate).getTime() - new Date(lever.startDate).getTime()) / msPerWeek));
-        const bonusRepet = (lever.type === 'Display' || lever.type === 'Meta') ? 1 : 0;
+        const bonusRepet = (lever.type === 'Display' || lever.type === 'Meta' || config.family === 'Meta' || config.family === 'Google') ? 1 : 0;
         lever.repetition = weeks + bonusRepet;
 
-        // Budget cible selon autoBudgetPercent
+        // Budget cible selon poids relatif (autoBudgetPercent)
         const targetBudget = Math.round((config.autoBudgetPercent / totalPercent) * h.totalBudget);
 
         // Couverture depuis le budget cible
@@ -780,7 +780,7 @@ export const useSimulationStore = create<SimulationState>((set, get) => ({
       const endDate = state.simulation.endDate;
       const msPerWeek = 7 * 24 * 60 * 60 * 1000;
       const weeks = Math.max(1, Math.round((new Date(endDate).getTime() - new Date(startDate).getTime()) / msPerWeek));
-      const bonusRepet = (leverType === 'Display' || leverType === 'Meta') ? 1 : 0;
+      const bonusRepet = (leverType === 'Display' || leverType === 'Meta' || config.family === 'Meta' || config.family === 'Google') ? 1 : 0;
       const initialRepetition = weeks + bonusRepet;
 
       // Ajout en objectif couverture : démarre à 0 % (budget 0). Répétition
@@ -846,10 +846,56 @@ export const useSimulationStore = create<SimulationState>((set, get) => ({
       const sc = state.stores.length;
       const hypotheses = state.simulation.hypotheses.map(h => {
         if (h.id !== hypothesisId) return h;
-        const levers = h.levers.map(l => l.id === leverId ? { ...l, ...updates } : l);
+        let levers = h.levers.map(l => l.id === leverId ? { ...l, ...updates } : l);
+        // En mode pctTotal, si on met à jour budgetPercent, redistribuer le reste
+        // proportionnellement aux autres leviers pour que la somme reste 100%
+        if (h.budgetMode === 'pctTotal' && 'budgetPercent' in updates) {
+          const newPct = (updates as { budgetPercent: number }).budgetPercent;
+          const others = levers.filter(l => l.id !== leverId);
+          const othersSum = others.reduce((s, l) => s + l.budgetPercent, 0);
+          const remaining = 100 - newPct;
+          if (othersSum > 0) {
+            levers = levers.map(l => {
+              if (l.id === leverId) return l;
+              return { ...l, budgetPercent: Math.round((l.budgetPercent / othersSum) * remaining) };
+            });
+            // Corriger l'arrondi sur le dernier levier pour que la somme soit exactement 100
+            const sum = levers.reduce((s, l) => s + l.budgetPercent, 0);
+            if (sum !== 100) {
+              const lastOther = levers.findIndex(l => l.id !== leverId);
+              if (lastOther !== -1) {
+                levers = levers.map((l, i) => i === lastOther ? { ...l, budgetPercent: l.budgetPercent + (100 - sum) } : l);
+              }
+            }
+          } else if (others.length > 0) {
+            // Tous les autres sont à 0, les distribuer également
+            const equalPct = Math.floor(remaining / others.length);
+            let assigned = 0;
+            levers = levers.map(l => {
+              if (l.id === leverId) return l;
+              assigned += equalPct;
+              return { ...l, budgetPercent: equalPct };
+            });
+            // Donner le reste au premier autre levier
+            const diff = remaining - assigned;
+            if (diff !== 0) {
+              const firstOtherIdx = levers.findIndex(l => l.id !== leverId);
+              if (firstOtherIdx !== -1) {
+                levers = levers.map((l, i) => i === firstOtherIdx ? { ...l, budgetPercent: l.budgetPercent + diff } : l);
+              }
+            }
+          }
+        }
         return recalcHypothesis({ ...h, levers }, state.simulation!.startDate, state.simulation!.endDate, state.leverConfigs, avgPop, sc);
       });
       debouncedCall(`lever-${leverId}`, () => api.putLever(hypothesisId, leverId, updates).catch(console.error));
+      // Persister aussi les leviers dont budgetPercent a été redistribué
+      if ('budgetPercent' in updates) {
+        const h = hypotheses.find(h => h.id === hypothesisId);
+        h?.levers.filter(l => l.id !== leverId).forEach(l => {
+          debouncedCall(`lever-${l.id}`, () => api.putLever(hypothesisId, l.id, { budgetPercent: l.budgetPercent }).catch(console.error));
+        });
+      }
       return { simulation: { ...state.simulation, hypotheses } };
     });
   },

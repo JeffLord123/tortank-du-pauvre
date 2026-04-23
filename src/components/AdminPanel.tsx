@@ -408,12 +408,11 @@ export default function AdminPanel() {
                           />
                         </div>
                         <div>
-                          <label className="text-[10px] uppercase tracking-wider text-fg/60 mb-1 block">% auto budget</label>
+                          <label className="text-[10px] uppercase tracking-wider text-fg/60 mb-1 block">Poids auto budget</label>
                           <PlainNumericInput
                             value={cfg.autoBudgetPercent}
                             onChange={v => updateLeverConfig(t, { autoBudgetPercent: v })}
                             min={0}
-                            max={100}
                             step={1}
                             className={inputClass}
                           />
