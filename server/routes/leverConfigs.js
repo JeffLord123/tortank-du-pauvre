@@ -15,6 +15,7 @@ function toClient(row) {
     color: row.color,
     icon: row.icon,
     autoBudgetPercent: row.auto_budget_percent,
+    hidden: !!row.hidden,
     logoUrl: row.logo_url != null ? row.logo_url : null,
   };
 }
@@ -40,6 +41,7 @@ router.put('/:type', (req, res) => {
     color,
     icon,
     autoBudgetPercent,
+    hidden,
     label,
     family,
   } = req.body;
@@ -59,6 +61,7 @@ router.put('/:type', (req, res) => {
     color = COALESCE(@color, color),
     icon = COALESCE(@icon, icon),
     auto_budget_percent = COALESCE(@autoBudgetPercent, auto_budget_percent),
+    hidden = COALESCE(@hidden, hidden),
     logo_url = @logo_url
     WHERE type = @type`)
     .run({
@@ -72,6 +75,7 @@ router.put('/:type', (req, res) => {
       color: color ?? null,
       icon: icon ?? null,
       autoBudgetPercent: autoBudgetPercent ?? null,
+      hidden: hidden != null ? (hidden ? 1 : 0) : null,
       logo_url,
     });
 

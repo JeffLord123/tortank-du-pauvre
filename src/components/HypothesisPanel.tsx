@@ -1,5 +1,5 @@
 import { useState, useEffect, useLayoutEffect, useRef, useMemo } from 'react';
-import { Plus, Copy, Trash2, Zap, Target, DollarSign, Percent, Sliders, Unlock, ChevronDown, ChevronUp, BookmarkPlus, AlertTriangle, Lock } from 'lucide-react';
+import { Plus, Copy, Trash2, Zap, Target, DollarSign, Percent, Sliders, Unlock, ChevronDown, ChevronUp, BookmarkPlus, AlertTriangle, Lock, Equal, Users, Scale } from 'lucide-react';
 import { useSimulationStore, computeDedupCoverage, distributeCoverageWaterfill } from '../store/simulationStore';
 import { useProfileStore, getActiveProfile } from '../store/profileStore';
 import { useVersionStore } from '../store/versionStore';
@@ -8,7 +8,7 @@ import LeverCard from './LeverCard';
 import LeverCardV3 from './LeverCardV3';
 import LeverLogoBadge from './LeverLogoBadge';
 import WarningBanner from './WarningBanner';
-import type { Hypothesis, LeverType, BudgetMode, ObjectiveMode } from '../types';
+import type { Hypothesis, LeverType, BudgetMode, ObjectiveMode, Preset, StoreDistributionMode } from '../types';
 import { formatNum } from '../utils/formatNum';
 import NumInput from './NumInput';
 import PrestationsPanel from './PrestationsPanel';
@@ -23,6 +23,27 @@ const BUDGET_MODE_LABELS: Record<BudgetMode, { label: string; icon: React.Elemen
   pctTotal:    { label: '% du total', icon: Percent, desc: 'Répartition en % du budget' },
   libre:       { label: 'Libre', icon: Unlock, desc: 'Contrôle total sur chaque paramètre' },
 };
+
+const STORE_DISTRIBUTION_MODES: {
+  id: StoreDistributionMode;
+  label: string;
+  desc: string;
+  icon: React.ElementType;
+}[] = [
+  { id: 'egal', label: 'Égal', desc: 'Même budget pour chaque point de vente.', icon: Equal },
+  { id: 'population', label: 'Population', desc: 'Répartition proportionnelle à la population de chaque magasin.', icon: Users },
+  { id: 'pondere', label: 'Pondéré (%)', desc: 'Comme la part population, avec un coefficient par magasin (100% = identique ; 110% ≈ +10% sur cette part, le total reste budgété). Poids dans Admin → Magasins.', icon: Scale },
+];
+
+/** Libellé de l'objectif + mode budget tels qu'enregistrés dans le preset (dialogues, bannière). */
+function formatPresetModeLabel(p: Preset): string {
+  if (p.objectiveMode === 'couverture') return 'Objectif couverture';
+  if (p.objectiveMode === 'budget' && p.budgetMode === 'libre') return 'Budget libre';
+  if (p.objectiveMode === 'budget' && p.budgetMode === 'automatique') return 'Budget · Automatique';
+  if (p.objectiveMode === 'budget' && p.budgetMode === 'pctTotal') return 'Budget · Manuel %';
+  if (p.objectiveMode === 'budget' && p.budgetMode === 'levier') return 'Budget · Manuel €';
+  return 'ce mode';
+}
 
 function nextPresetNameFromHypothesisName(name: string, existingNames: Set<string>): string {
   const base = name.trim() || 'Hypothèse';
@@ -40,11 +61,23 @@ interface HypothesisCardProps {
   isActive: boolean;
 }
 
-function ZoneDropdown({ hypothesisId, zoneId }: { hypothesisId: string; zoneId: string }) {
+function ZoneDropdown({
+  hypothesisId,
+  zoneId,
+  disabled = false,
+}: {
+  hypothesisId: string;
+  zoneId: string;
+  disabled?: boolean;
+}) {
   const [open, setOpen] = useState(false);
   const ref = useRef<HTMLDivElement>(null);
   const { updateHypothesis } = useSimulationStore();
   const selected = ZONES.find(z => z.id === zoneId) ?? ZONES[0];
+
+  useEffect(() => {
+    if (disabled) setOpen(false);
+  }, [disabled]);
 
   useEffect(() => {
     const handler = (e: MouseEvent) => {
@@ -58,13 +91,22 @@ function ZoneDropdown({ hypothesisId, zoneId }: { hypothesisId: string; zoneId: 
     <div ref={ref} className="relative">
       <button
         type="button"
-        onClick={() => setOpen(o => !o)}
-        className="w-full flex items-center justify-between gap-2 bg-navy-800/60 border border-navy-600/30 rounded-lg px-3 py-2 text-xs text-fg hover:border-teal-400/40 focus:outline-none focus:border-teal-400/40 transition-colors"
+        disabled={disabled}
+        title={disabled ? 'Verrouillé par le preset · déverrouiller depuis la bannière' : undefined}
+        onClick={() => {
+          if (disabled) return;
+          setOpen(o => !o);
+        }}
+        className={`w-full flex items-center justify-between gap-2 bg-navy-800/60 border border-navy-600/30 rounded-lg px-3 py-2 text-xs text-fg transition-colors ${
+          disabled
+            ? 'opacity-40 cursor-not-allowed'
+            : 'hover:border-teal-400/40 focus:outline-none focus:border-teal-400/40'
+        }`}
       >
         <span>{selected.label}</span>
         <ChevronDown className={`w-3.5 h-3.5 text-fg/50 transition-transform duration-200 ${open ? 'rotate-180' : ''}`} />
       </button>
-      {open && (
+      {open && !disabled && (
         <div className="absolute top-full left-0 right-0 mt-1.5 z-30 bg-navy-900 border border-fg/15 rounded-lg shadow-xl shadow-black/40 overflow-hidden animate-fade-in">
           {ZONES.map(z => (
             <button
@@ -276,28 +318,47 @@ function HypothesisCard({ hypothesis, isActive }: HypothesisCardProps) {
     { updates: Partial<Hypothesis>; targetLabel: string } | null
   >(null);
   const [unlockConfirmOpen, setUnlockConfirmOpen] = useState(false);
-  const [pendingBudgetEdit, setPendingBudgetEdit] = useState<
-    { field: 'totalBudget' | 'maxBudgetPerStore'; label: string; current: number } | null
-  >(null);
   const isLocked = version === 'v2' && appliedPreset !== null;
   const presetTriggerRef = useRef<HTMLButtonElement>(null);
   const presetMenuRef = useRef<HTMLDivElement>(null);
   const warnings = getHypothesisWarnings(hypothesis.id);
 
-  // V2 auto mode = Budget objective + automatique budget mode
-  const isV2AutoMode =
-    version === 'v2' &&
-    hypothesis.objectiveMode === 'budget' &&
-    hypothesis.budgetMode === 'automatique';
+  const appliedPresetDefinition = useMemo(
+    () => (appliedPreset ? presets.find(p => p.id === appliedPreset.id) ?? null : null),
+    [appliedPreset, presets],
+  );
 
-  function isAutoUpdate(updates: Partial<Hypothesis>): boolean {
-    const nextObj = updates.objectiveMode ?? hypothesis.objectiveMode;
-    const nextMode = updates.budgetMode ?? hypothesis.budgetMode;
-    return nextObj === 'budget' && nextMode === 'automatique';
+  function v2StateAfter(updates: Partial<Hypothesis>): { objectiveMode: ObjectiveMode; budgetMode: BudgetMode } {
+    return {
+      objectiveMode: updates.objectiveMode ?? hypothesis.objectiveMode,
+      budgetMode: updates.budgetMode ?? hypothesis.budgetMode,
+    };
   }
 
+  /** True si, après le clic, l’objectif + mode budget coïncident avec le preset (pas de conflit). */
+  function v2ModeMatchesAppliedPreset(updates: Partial<Hypothesis>): boolean {
+    if (!appliedPreset) return true;
+    if (!appliedPresetDefinition) return true;
+    const next = v2StateAfter(updates);
+    return (
+      next.objectiveMode === appliedPresetDefinition.objectiveMode &&
+      next.budgetMode === appliedPresetDefinition.budgetMode
+    );
+  }
+
+  function v2ModeButtonLocked(updates: Partial<Hypothesis>): boolean {
+    return isLocked && appliedPresetDefinition !== null && !v2ModeMatchesAppliedPreset(updates);
+  }
+
+  /** Objectif couverture + preset couverture : le slider (et la saisie) ne doivent pas bouger. */
+  const isCoverageGlobalSliderLocked =
+    isLocked && appliedPresetDefinition?.objectiveMode === 'couverture';
+
+  const budgetFieldInputClass =
+    'min-w-0 flex-1 bg-navy-800/60 border border-navy-600/30 rounded-lg px-3 py-2 text-xs font-mono text-fg focus:outline-none focus:border-teal-400/40 transition-colors disabled:opacity-40 disabled:cursor-not-allowed';
+
   function requestV2ModeChange(updates: Partial<Hypothesis>, targetLabel: string) {
-    if (version === 'v2' && appliedPreset && !isAutoUpdate(updates)) {
+    if (version === 'v2' && appliedPreset && !v2ModeMatchesAppliedPreset(updates)) {
       setPendingModeChange({ updates, targetLabel });
       return;
     }
@@ -322,7 +383,12 @@ function HypothesisCard({ hypothesis, isActive }: HypothesisCardProps) {
   );
 
   const existingLeverTypes = hypothesis.levers.map(l => l.type);
-  const availableLevers = LEVER_TYPES.filter(t => !existingLeverTypes.includes(t as LeverType));
+  const availableLevers = LEVER_TYPES.filter(t => {
+    if (existingLeverTypes.includes(t as LeverType)) return false;
+    const cfg = leverConfigs[t as LeverType];
+    if (cfg?.hidden) return false;
+    return true;
+  });
 
   const budgetEditable = hypothesis.budgetMode === 'automatique' || hypothesis.budgetMode === 'pctTotal';
 
@@ -489,6 +555,7 @@ function HypothesisCard({ hypothesis, isActive }: HypothesisCardProps) {
                     <ZoneDropdown
                       hypothesisId={hypothesis.id}
                       zoneId={hypothesis.zoneId ?? 'zone1'}
+                      disabled={isLocked}
                     />
                     <p className="text-[10px] text-fg/45 mt-1">
                       Population moyenne&nbsp;:{' '}
@@ -496,6 +563,39 @@ function HypothesisCard({ hypothesis, isActive }: HypothesisCardProps) {
                         Math.round((globalParams.defaultPopulation || 140000) * getZoneMultiplier(hypothesis.zoneId)),
                       )}{' '}
                       hab./magasin
+                    </p>
+                  </div>
+
+                  <div>
+                    <label className="text-[10px] uppercase tracking-wider text-fg/60 mb-1.5 block">
+                      Répartition budget par magasin
+                    </label>
+                    <div className="flex rounded-lg overflow-hidden border border-navy-600/30">
+                      {STORE_DISTRIBUTION_MODES.map(({ id, label, desc, icon: Icon }) => {
+                        const mode = hypothesis.storeDistributionMode ?? 'egal';
+                        const on = mode === id;
+                        return (
+                          <button
+                            key={id}
+                            type="button"
+                            disabled={isLocked}
+                            onClick={() => updateHypothesis(hypothesis.id, { storeDistributionMode: id })}
+                            title={desc}
+                            className={`flex-1 py-2 px-2 text-xs font-medium transition-colors flex flex-row items-center justify-center gap-1.5 ${
+                              on ? 'bg-teal-400/15 text-teal-400' : 'bg-navy-800/40 text-fg/72 hover:text-fg/88'
+                            } ${isLocked ? 'opacity-40 cursor-not-allowed' : ''}`}
+                          >
+                            <Icon className="w-3 h-3 shrink-0" />
+                            {label}
+                          </button>
+                        );
+                      })}
+                    </div>
+                    <p className="text-[10px] text-fg/62 mt-1">
+                      {
+                        STORE_DISTRIBUTION_MODES.find(m => m.id === (hypothesis.storeDistributionMode ?? 'egal'))
+                          ?.desc
+                      }
                     </p>
                   </div>
 
@@ -562,11 +662,16 @@ function HypothesisCard({ hypothesis, isActive }: HypothesisCardProps) {
                           <label className="text-[10px] uppercase tracking-wider text-fg/60 mb-1.5 block">Objectif</label>
                           <div className="flex rounded-lg overflow-hidden border border-navy-600/30">
                             <button
+                              type="button"
+                              disabled={v2ModeButtonLocked({
+                                objectiveMode: 'budget',
+                                ...(hypothesis.budgetMode === 'libre' ? { budgetMode: 'automatique' } : {}),
+                              })}
                               onClick={() => requestV2ModeChange(
                                 { objectiveMode: 'budget', ...(hypothesis.budgetMode === 'libre' ? { budgetMode: 'automatique' } : {}) },
                                 hypothesis.budgetMode === 'libre' ? 'Budget · Auto' : 'Budget',
                               )}
-                              className={`flex-1 py-2 text-xs font-medium transition-colors flex items-center justify-center gap-1.5 ${
+                              className={`flex-1 py-2 text-xs font-medium transition-colors flex items-center justify-center gap-1.5 disabled:opacity-40 disabled:cursor-not-allowed ${
                                 hypothesis.objectiveMode === 'budget' && hypothesis.budgetMode !== 'libre'
                                   ? 'bg-teal-400/15 text-teal-400'
                                   : 'bg-navy-800/40 text-fg/72 hover:text-fg/88'
@@ -576,8 +681,10 @@ function HypothesisCard({ hypothesis, isActive }: HypothesisCardProps) {
                               Budget
                             </button>
                             <button
+                              type="button"
+                              disabled={v2ModeButtonLocked({ objectiveMode: 'couverture' })}
                               onClick={() => requestV2ModeChange({ objectiveMode: 'couverture' }, 'Couverture')}
-                              className={`flex-1 py-2 text-xs font-medium transition-colors flex items-center justify-center gap-1.5 ${
+                              className={`flex-1 py-2 text-xs font-medium transition-colors flex items-center justify-center gap-1.5 disabled:opacity-40 disabled:cursor-not-allowed ${
                                 hypothesis.objectiveMode === 'couverture'
                                   ? 'bg-teal-400/15 text-teal-400'
                                   : 'bg-navy-800/40 text-fg/72 hover:text-fg/88'
@@ -587,8 +694,10 @@ function HypothesisCard({ hypothesis, isActive }: HypothesisCardProps) {
                               Couverture
                             </button>
                             <button
+                              type="button"
+                              disabled={v2ModeButtonLocked({ objectiveMode: 'budget', budgetMode: 'libre' })}
                               onClick={() => requestV2ModeChange({ objectiveMode: 'budget', budgetMode: 'libre' }, 'Libre')}
-                              className={`flex-1 py-2 text-xs font-medium transition-colors flex items-center justify-center gap-1.5 ${
+                              className={`flex-1 py-2 text-xs font-medium transition-colors flex items-center justify-center gap-1.5 disabled:opacity-40 disabled:cursor-not-allowed ${
                                 hypothesis.objectiveMode === 'budget' && hypothesis.budgetMode === 'libre'
                                   ? 'bg-teal-400/15 text-teal-400'
                                   : 'bg-navy-800/40 text-fg/72 hover:text-fg/88'
@@ -606,12 +715,13 @@ function HypothesisCard({ hypothesis, isActive }: HypothesisCardProps) {
                             <div className="flex rounded-lg overflow-hidden border border-navy-600/30">
                               {(['automatique', 'pctTotal', 'levier'] as BudgetMode[]).map(key => {
                                 const v2Labels: Record<string, string> = { automatique: 'Auto', pctTotal: 'Manuel %', levier: 'Manuel €' };
-                                const { icon: Icon } = BUDGET_MODE_LABELS[key];
                                 return (
                                   <button
+                                    type="button"
                                     key={key}
+                                    disabled={v2ModeButtonLocked({ budgetMode: key })}
                                     onClick={() => requestV2ModeChange({ budgetMode: key }, `Budget · ${v2Labels[key]}`)}
-                                    className={`flex-1 py-2 text-xs font-medium transition-colors flex items-center justify-center gap-1.5 ${
+                                    className={`flex-1 py-2 text-xs font-medium transition-colors flex items-center justify-center gap-1.5 disabled:opacity-40 disabled:cursor-not-allowed ${
                                       hypothesis.budgetMode === key
                                         ? 'bg-teal-400/15 text-teal-400'
                                         : 'bg-navy-800/40 text-fg/72 hover:text-fg/88'
@@ -671,9 +781,25 @@ function HypothesisCard({ hypothesis, isActive }: HypothesisCardProps) {
                       <div className="grid grid-cols-2 gap-3">
                         <div>
                           <label className="text-[10px] uppercase tracking-wider text-fg/60 mb-1.5 block">Budget total</label>
-                          <div className="bg-navy-800/30 border border-navy-600/10 rounded-lg px-3 py-2 text-xs font-mono text-teal-400">
-                            {formatNum(hypothesis.totalBudget)} €
-                          </div>
+                          {isLocked ? (
+                            <div className="flex items-center gap-1.5">
+                              <NumInput
+                                value={hypothesis.totalBudget}
+                                onChange={v => updateHypothesis(hypothesis.id, { totalBudget: v })}
+                                min={0}
+                                disabled
+                                title="Verrouillé par le preset · déverrouiller depuis la bannière"
+                                className={budgetFieldInputClass}
+                              />
+                              <span className="text-[10px] text-fg/62 tabular-nums shrink-0" aria-hidden>
+                                €
+                              </span>
+                            </div>
+                          ) : (
+                            <div className="bg-navy-800/30 border border-navy-600/10 rounded-lg px-3 py-2 text-xs font-mono text-teal-400">
+                              {formatNum(hypothesis.totalBudget)} €
+                            </div>
+                          )}
                         </div>
                         <div>
                           <label className="text-[10px] uppercase tracking-wider text-fg/60 mb-1.5 block">
@@ -684,7 +810,9 @@ function HypothesisCard({ hypothesis, isActive }: HypothesisCardProps) {
                               value={hypothesis.maxBudgetPerStore}
                               onChange={v => updateHypothesis(hypothesis.id, { maxBudgetPerStore: v })}
                               min={0}
-                              className="min-w-0 flex-1 bg-navy-800/60 border border-navy-600/30 rounded-lg px-3 py-2 text-xs font-mono text-fg focus:outline-none focus:border-teal-400/40 transition-colors"
+                              disabled={isLocked}
+                              title={isLocked ? 'Verrouillé par le preset · déverrouiller depuis la bannière' : undefined}
+                              className={budgetFieldInputClass}
                             />
                             <span className="text-[10px] text-fg/62 tabular-nums shrink-0" aria-hidden>€</span>
                           </div>
@@ -721,11 +849,15 @@ function HypothesisCard({ hypothesis, isActive }: HypothesisCardProps) {
                               step={0.5}
                               value={displayCov}
                               label={`${displayCov.toFixed(1)} %`}
-                              disabled={hypothesis.levers.length === 0}
+                              disabled={hypothesis.levers.length === 0 || isCoverageGlobalSliderLocked}
                               onChange={e => handleTargetCovChange(Number(e.target.value))}
                               onPointerDown={() => { isDraggingCov.current = true; setLocalTargetCov(dedupLeverCoverage); }}
                               onPointerUp={() => { isDraggingCov.current = false; setLocalTargetCov(null); }}
-                              className={`w-full relative ${hypothesis.levers.length === 0 ? 'opacity-40 cursor-not-allowed' : ''}`}
+                              className={`w-full relative ${
+                                hypothesis.levers.length === 0 || isCoverageGlobalSliderLocked
+                                  ? 'opacity-40 cursor-not-allowed'
+                                  : ''
+                              }`}
                             />
                             {/* Connecteurs entre les ticks et les labels repoussés */}
                             {spreadFillPoints.length > 0 && (
@@ -774,13 +906,18 @@ function HypothesisCard({ hypothesis, isActive }: HypothesisCardProps) {
                               min={0}
                               max={100}
                               step={0.5}
-                              disabled={hypothesis.levers.length === 0}
+                              disabled={hypothesis.levers.length === 0 || isCoverageGlobalSliderLocked}
+                              title={
+                                isCoverageGlobalSliderLocked
+                                  ? 'Verrouillé par le preset couverture · déverrouiller depuis la bannière'
+                                  : undefined
+                              }
                               value={covInput !== '' ? covInput : displayCov.toFixed(1)}
                               onFocus={() => setCovInput(displayCov.toFixed(1))}
                               onChange={e => setCovInput(e.target.value)}
                               onBlur={commitCovInput}
                               onKeyDown={e => { if (e.key === 'Enter') { (e.target as HTMLInputElement).blur(); } }}
-                              className="w-full bg-navy-800/60 border border-navy-600/30 rounded-md px-2 py-1.5 text-xs font-mono text-right text-fg focus:outline-none focus:border-teal-400/40 transition-colors disabled:opacity-40"
+                              className="w-full bg-navy-800/60 border border-navy-600/30 rounded-md px-2 py-1.5 text-xs font-mono text-right text-fg focus:outline-none focus:border-teal-400/40 transition-colors disabled:opacity-40 disabled:cursor-not-allowed"
                             />
                             <span className="text-xs text-fg/60 shrink-0">%</span>
                           </div>
@@ -788,7 +925,9 @@ function HypothesisCard({ hypothesis, isActive }: HypothesisCardProps) {
                         <p className="text-[10px] text-fg/45 mt-1">
                           {hypothesis.levers.length === 0
                             ? 'Ajoutez un levier pour activer ce slider'
-                            : 'Ajuste le budget de chaque levier · la répétition s\'adapte'}
+                            : isCoverageGlobalSliderLocked
+                              ? 'Couverture figée par le preset · déverrouillez l’hypothèse pour ajuster'
+                              : 'Ajuste le budget de chaque levier · la répétition s\'adapte'}
                         </p>
                       </div>
                     </div>
@@ -799,30 +938,19 @@ function HypothesisCard({ hypothesis, isActive }: HypothesisCardProps) {
                           Budget total
                         </label>
                         {budgetEditable ? (
-                          isLocked ? (
-                            <button
-                              type="button"
-                              onClick={() => setPendingBudgetEdit({ field: 'totalBudget', label: 'Budget total', current: hypothesis.totalBudget })}
-                              className="w-full flex items-center gap-1.5 bg-navy-800/40 border border-amber-400/25 rounded-lg px-3 py-2 text-xs font-mono text-fg/90 hover:border-amber-400/50 transition-colors cursor-pointer"
-                              title="Verrouillé par le preset · cliquer pour modifier"
-                            >
-                              <Lock className="w-3 h-3 text-amber-400 shrink-0" />
-                              <span className="flex-1 text-left">{formatNum(hypothesis.totalBudget)}</span>
-                              <span className="text-[10px] text-fg/62 shrink-0">€</span>
-                            </button>
-                          ) : (
-                            <div className="flex items-center gap-1.5">
-                              <NumInput
-                                value={hypothesis.totalBudget}
-                                onChange={v => updateHypothesis(hypothesis.id, { totalBudget: v })}
-                                min={0}
-                                className="min-w-0 flex-1 bg-navy-800/60 border border-navy-600/30 rounded-lg px-3 py-2 text-xs font-mono text-fg focus:outline-none focus:border-teal-400/40 transition-colors"
-                              />
-                              <span className="text-[10px] text-fg/62 tabular-nums shrink-0" aria-hidden>
-                                €
-                              </span>
-                            </div>
-                          )
+                          <div className="flex items-center gap-1.5">
+                            <NumInput
+                              value={hypothesis.totalBudget}
+                              onChange={v => updateHypothesis(hypothesis.id, { totalBudget: v })}
+                              min={0}
+                              disabled={isLocked}
+                              title={isLocked ? 'Verrouillé par le preset · déverrouiller depuis la bannière' : undefined}
+                              className={budgetFieldInputClass}
+                            />
+                            <span className="text-[10px] text-fg/62 tabular-nums shrink-0" aria-hidden>
+                              €
+                            </span>
+                          </div>
                         ) : (
                           <div className="bg-navy-800/30 border border-navy-600/10 rounded-lg px-3 py-2 text-xs font-mono text-teal-400">
                             {formatNum(hypothesis.totalBudget)} €
@@ -833,36 +961,25 @@ function HypothesisCard({ hypothesis, isActive }: HypothesisCardProps) {
                         <label className="text-[10px] uppercase tracking-wider text-fg/60 mb-1.5 block">
                           Budget max / magasin
                         </label>
-                        {isLocked ? (
-                          <button
-                            type="button"
-                            onClick={() => setPendingBudgetEdit({ field: 'maxBudgetPerStore', label: 'Budget max / magasin', current: hypothesis.maxBudgetPerStore })}
-                            className="w-full flex items-center gap-1.5 bg-navy-800/40 border border-amber-400/25 rounded-lg px-3 py-2 text-xs font-mono text-fg/90 hover:border-amber-400/50 transition-colors cursor-pointer"
-                            title="Verrouillé par le preset · cliquer pour modifier"
-                          >
-                            <Lock className="w-3 h-3 text-amber-400 shrink-0" />
-                            <span className="flex-1 text-left">{formatNum(hypothesis.maxBudgetPerStore)}</span>
-                            <span className="text-[10px] text-fg/62 shrink-0">€</span>
-                          </button>
-                        ) : (
                         <div className="flex items-center gap-1.5">
                           <NumInput
                             value={hypothesis.maxBudgetPerStore}
                             onChange={v => updateHypothesis(hypothesis.id, { maxBudgetPerStore: v })}
                             min={0}
-                            className="min-w-0 flex-1 bg-navy-800/60 border border-navy-600/30 rounded-lg px-3 py-2 text-xs font-mono text-fg focus:outline-none focus:border-teal-400/40 transition-colors"
+                            disabled={isLocked}
+                            title={isLocked ? 'Verrouillé par le preset · déverrouiller depuis la bannière' : undefined}
+                            className={budgetFieldInputClass}
                           />
                           <span className="text-[10px] text-fg/62 tabular-nums shrink-0" aria-hidden>
                             €
                           </span>
                         </div>
-                        )}
                       </div>
                     </div>
                   ))}
 
-                  {/* Preset quick-apply (V2: visible uniquement en mode Auto) */}
-                  {(version !== 'v2' || isV2AutoMode) && (
+                  {/* Preset quick-apply (V1–V2 : tous objectifs / modes) */}
+                  {(version === 'v1' || version === 'v2' || version === 'v3') && (
                     <div className="relative w-full">
                       <button
                         ref={presetTriggerRef}
@@ -942,7 +1059,7 @@ function HypothesisCard({ hypothesis, isActive }: HypothesisCardProps) {
                           const fam = cfg?.family || 'Autres';
                           (grouped[fam] ??= []).push(t);
                         }
-                        const familyOrder = ['Display Mobile', 'Meta', 'CTV', 'VOL', 'DOOH', 'Google', 'Audio', 'Legacy', 'Autres'];
+                        const familyOrder = ['Display Mobile', 'Display Desktop', 'Meta', 'CTV', 'Youtube', 'DOOH', 'Google', 'Audio', 'Pinterest', 'Snapchat', 'Legacy', 'Autres'];
                         const fams = Object.keys(grouped).sort((a, b) => {
                           const ia = familyOrder.indexOf(a); const ib = familyOrder.indexOf(b);
                           return (ia === -1 ? 999 : ia) - (ib === -1 ? 999 : ib);
@@ -986,58 +1103,6 @@ function HypothesisCard({ hypothesis, isActive }: HypothesisCardProps) {
         </div>
       </div>
     </div>
-
-    {pendingBudgetEdit && appliedPreset && (
-      <div
-        className="fixed inset-0 z-[100] flex items-center justify-center p-4 bg-black/55 backdrop-blur-[2px]"
-        role="dialog"
-        aria-modal="true"
-        aria-labelledby="budget-edit-title"
-        onClick={() => setPendingBudgetEdit(null)}
-      >
-        <div
-          className="glass-card max-w-md w-full p-4 shadow-2xl border border-amber-400/30 animate-fade-in"
-          onClick={e => e.stopPropagation()}
-        >
-          <div className="flex items-start gap-3">
-            <div className="w-8 h-8 rounded-full bg-amber-400/15 flex items-center justify-center shrink-0">
-              <AlertTriangle className="w-4 h-4 text-amber-400" />
-            </div>
-            <div className="flex-1">
-              <h2 id="budget-edit-title" className="text-sm font-semibold text-fg">
-                Modifier le {pendingBudgetEdit.label.toLowerCase()}&nbsp;?
-              </h2>
-              <p className="text-xs text-fg/75 mt-2 leading-relaxed">
-                Le preset <strong className="text-fg/92">« {appliedPreset.name} »</strong> fige les
-                budgets (total et max / PDV) de cette hypothèse. En modifiant le{' '}
-                <strong className="text-fg/92">{pendingBudgetEdit.label.toLowerCase()}</strong>, la
-                répartition automatique des leviers sera recalculée et l'hypothèse sera
-                déverrouillée.
-              </p>
-            </div>
-          </div>
-          <div className="flex justify-end gap-2 mt-5">
-            <button
-              type="button"
-              className="px-3 py-1.5 rounded-lg text-xs font-medium text-fg/72 hover:bg-fg/10 transition-colors"
-              onClick={() => setPendingBudgetEdit(null)}
-            >
-              Garder les valeurs du preset
-            </button>
-            <button
-              type="button"
-              className="px-4 py-2 rounded-lg text-xs font-semibold bg-amber-500 text-navy-900 shadow-md shadow-black/25 hover:bg-amber-400 focus:outline-none focus-visible:ring-2 focus-visible:ring-white/80 focus-visible:ring-offset-2 focus-visible:ring-offset-navy-900 transition-colors"
-              onClick={() => {
-                setAppliedPreset(null);
-                setPendingBudgetEdit(null);
-              }}
-            >
-              Déverrouiller et modifier
-            </button>
-          </div>
-        </div>
-      </div>
-    )}
 
     {unlockConfirmOpen && appliedPreset && (
       <div
@@ -1112,10 +1177,15 @@ function HypothesisCard({ hypothesis, isActive }: HypothesisCardProps) {
               </h2>
               <p className="text-xs text-fg/75 mt-2 leading-relaxed">
                 Le preset <strong className="text-fg/92">« {appliedPreset?.name} »</strong> a été
-                conçu pour le mode <strong className="text-fg/92">Auto</strong>. En passant au mode{' '}
-                <strong className="text-fg/92">{pendingModeChange.targetLabel}</strong>, les
-                couvertures, répétitions et budgets des leviers pourront être recalculés et ne
-                correspondront plus exactement aux valeurs du preset.
+                conçu pour le mode{' '}
+                {appliedPresetDefinition ? (
+                  <strong className="text-fg/92">{formatPresetModeLabel(appliedPresetDefinition)}</strong>
+                ) : (
+                  <span className="text-fg/92">(mode inconnu)</span>
+                )}
+                . En passant au mode <strong className="text-fg/92">{pendingModeChange.targetLabel}</strong>
+                , les couvertures, répétitions et budgets des leviers pourront être recalculés et
+                ne correspondront plus exactement aux valeurs du preset.
               </p>
             </div>
           </div>
@@ -1125,7 +1195,7 @@ function HypothesisCard({ hypothesis, isActive }: HypothesisCardProps) {
               className="px-3 py-1.5 rounded-lg text-xs font-medium text-fg/72 hover:bg-fg/10 transition-colors"
               onClick={() => setPendingModeChange(null)}
             >
-              Rester en Auto
+              Garder le mode du preset
             </button>
             <button
               type="button"
@@ -1227,13 +1297,14 @@ function HypothesisCard({ hypothesis, isActive }: HypothesisCardProps) {
 }
 
 export default function HypothesisPanel() {
-  const { simulation, activeHypothesisId, addHypothesis, globalParams, apiReady } = useSimulationStore();
+  const { simulation, activeHypothesisId, addHypothesis, globalParams, stores, apiReady } = useSimulationStore();
   const version = useVersionStore(s => s.activeVersion);
   const defaultBudgetMode = version === 'v3' ? 'v3-levier' : 'automatique';
+  const defaultTotal = globalParams.typicalBudgetPerStore * (stores.length || 1);
 
   useEffect(() => {
     if (apiReady && simulation && simulation.hypotheses.length === 0) {
-      addHypothesis('Hypothèse 1', globalParams.maxBudgetPerStore, 'budget', defaultBudgetMode, globalParams.defaultTotalBudget);
+      addHypothesis('Hypothèse 1', globalParams.maxBudgetPerStore, 'budget', defaultBudgetMode, defaultTotal);
     }
   }, [simulation?.id, apiReady]);
 
@@ -1241,7 +1312,7 @@ export default function HypothesisPanel() {
 
   const handleAdd = () => {
     const n = simulation.hypotheses.length + 1;
-    addHypothesis(`Hypothèse ${n}`, globalParams.maxBudgetPerStore, 'budget', defaultBudgetMode, globalParams.defaultTotalBudget);
+    addHypothesis(`Hypothèse ${n}`, globalParams.maxBudgetPerStore, 'budget', defaultBudgetMode, defaultTotal);
   };
 
   return (

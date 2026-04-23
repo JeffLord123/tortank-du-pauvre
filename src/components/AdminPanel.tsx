@@ -1,5 +1,5 @@
-import { useState, useRef, useEffect } from 'react';
-import { Settings, Plus, Trash2, X, Upload, Download, Sliders, MapPin, Gauge, ArrowLeftRight, Image, Lock, ChevronUp, ChevronDown, History, RotateCcw } from 'lucide-react';
+import { useState, useRef, useEffect, useMemo } from 'react';
+import { Settings, Plus, Trash2, X, Upload, Download, Sliders, MapPin, Gauge, ArrowLeftRight, Image, Lock, ChevronUp, ChevronDown, ChevronRight, History, RotateCcw, Eye, EyeOff, AlertTriangle, ArrowUpDown } from 'lucide-react';
 import { useSimulationStore } from '../store/simulationStore';
 import { useProfileStore, getActiveProfile } from '../store/profileStore';
 import { useHistoryStore } from '../store/historyStore';
@@ -85,7 +85,8 @@ function PresetRow({
       </div>
       {!readOnly && (
         <button
-          onClick={onRemove}
+          type="button"
+          onClick={e => { e.stopPropagation(); onRemove(); }}
           className="p-1.5 rounded-md text-red-500 hover:text-red-400 hover:bg-red-500/10 transition-colors shrink-0"
         >
           <Trash2 className="w-3.5 h-3.5" />
@@ -115,6 +116,11 @@ export default function AdminPanel() {
     if (showAdmin && !isAdminUser) setTab('presets');
   }, [showAdmin, isAdminUser]);
 
+  const [presetPendingDelete, setPresetPendingDelete] = useState<Preset | null>(null);
+  useEffect(() => {
+    if (!showAdmin) setPresetPendingDelete(null);
+  }, [showAdmin]);
+
   const adminPresetsList = presets.filter(p => (p.scope ?? 'admin') === 'admin');
   const myPresetsList = presets.filter(
     p => p.scope === 'user' && p.ownerProfileId === activeProfileId,
@@ -125,12 +131,54 @@ export default function AdminPanel() {
     profileId: activeProfileId ?? null,
   };
 
+  const requestRemovePreset = (preset: Preset) => {
+    setPresetPendingDelete(preset);
+  };
+
   const moveAdminPreset = (index: number, direction: -1 | 1) => {
     const newList = [...adminPresetsList];
     const target = index + direction;
     if (target < 0 || target >= newList.length) return;
     [newList[index], newList[target]] = [newList[target], newList[index]];
     reorderAdminPresets(newList.map(p => p.id));
+  };
+
+  const defaultStoreWeight = 100;
+  const storeWeightTotal = useMemo(
+    () =>
+      Math.round(stores.reduce((s, x) => s + (x.budgetWeightPercent ?? defaultStoreWeight), 0) * 10) / 10,
+    [stores],
+  );
+
+  type StoreSortKey = 'name' | 'population' | 'weight';
+  const [storeSort, setStoreSort] = useState<{ key: StoreSortKey; dir: 'asc' | 'desc' }>({ key: 'name', dir: 'asc' });
+  const sortedStores = useMemo(() => {
+    const w = (s: (typeof stores)[number]) => s.budgetWeightPercent ?? defaultStoreWeight;
+    const mult = storeSort.dir === 'asc' ? 1 : -1;
+    return [...stores].sort((a, b) => {
+      let cmp = 0;
+      if (storeSort.key === 'name') {
+        cmp = a.name.localeCompare(b.name, 'fr', { sensitivity: 'base' });
+      } else if (storeSort.key === 'population') {
+        cmp = a.population - b.population;
+      } else {
+        cmp = w(a) - w(b);
+      }
+      if (cmp !== 0) return cmp * mult;
+      return a.id.localeCompare(b.id);
+    });
+  }, [stores, storeSort, defaultStoreWeight]);
+
+  const toggleStoreSort = (key: StoreSortKey) => {
+    setStoreSort(prev => (prev.key === key ? { key, dir: prev.dir === 'asc' ? 'desc' : 'asc' } : { key, dir: 'asc' }));
+  };
+  const [collapsedLevers, setCollapsedLevers] = useState<Set<string>>(new Set());
+  const toggleLeverCollapsed = (type: string) => {
+    setCollapsedLevers(prev => {
+      const next = new Set(prev);
+      if (next.has(type)) next.delete(type); else next.add(type);
+      return next;
+    });
   };
   const [newStoreName, setNewStoreName] = useState('');
   const [importText, setImportText] = useState('');
@@ -214,6 +262,7 @@ export default function AdminPanel() {
   const inputClass = 'w-full bg-navy-800/60 border border-navy-600/30 rounded-lg px-3 py-2 text-xs text-fg placeholder:text-fg/62 focus:outline-none focus:border-teal-400/40';
 
   return (
+    <>
     <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/60 backdrop-blur-sm" onClick={toggleAdmin}>
       <div
         className="bg-navy-900 border border-navy-600/50 rounded-2xl shadow-2xl w-full max-w-2xl h-[85vh] flex flex-col overflow-hidden animate-fade-in"
@@ -280,7 +329,7 @@ export default function AdminPanel() {
                         preset={preset}
                         leverConfigs={leverConfigs}
                         readOnly={false}
-                        onRemove={() => removePreset(preset.id, removeCtx)}
+                        onRemove={() => requestRemovePreset(preset)}
                         onMoveUp={() => moveAdminPreset(idx, -1)}
                         onMoveDown={() => moveAdminPreset(idx, 1)}
                         isFirst={idx === 0}
@@ -317,7 +366,7 @@ export default function AdminPanel() {
                         preset={preset}
                         leverConfigs={leverConfigs}
                         readOnly={false}
-                        onRemove={() => removePreset(preset.id, removeCtx)}
+                        onRemove={() => requestRemovePreset(preset)}
                       />
                     ))
                   )}
@@ -342,20 +391,41 @@ export default function AdminPanel() {
               <p className="text-[11px] text-fg/62">Modifier les paramètres par défaut de chaque levier média.</p>
 
               <div className="space-y-3">
-                {LEVER_TYPES.map(type => {
+                {[...LEVER_TYPES].sort((a, b) => {
+                  const ca = leverConfigs[a as LeverType];
+                  const cb = leverConfigs[b as LeverType];
+                  const aLegacy = ca?.family === 'Legacy' ? 1 : 0;
+                  const bLegacy = cb?.family === 'Legacy' ? 1 : 0;
+                  if (aLegacy !== bLegacy) return aLegacy - bLegacy;
+                  const nameA = ca?.family && ca.family !== 'Legacy' ? `${ca.family} - ${ca.label || a}` : (ca?.label || a);
+                  const nameB = cb?.family && cb.family !== 'Legacy' ? `${cb.family} - ${cb.label || b}` : (cb?.label || b);
+                  return nameA.localeCompare(nameB, 'fr');
+                }).map(type => {
                   const t = type as LeverType;
                   const cfg = leverConfigs[t];
                   if (!cfg) return null;
                   const margin = cfg.defaultCpm > 0 ? ((cfg.defaultCpm - (cfg.purchaseCpm ?? 0)) / cfg.defaultCpm) * 100 : 0;
                   const marginEuro = cfg.defaultCpm - (cfg.purchaseCpm ?? 0);
+                  const isCollapsed = collapsedLevers.has(t);
+                  const displayName = cfg.family && cfg.family !== 'Legacy'
+                    ? `${cfg.family} - ${cfg.label || t}`
+                    : (cfg.label || t);
                   return (
-                    <div key={t} className="glass-card p-4 space-y-3">
-                      <div className="flex items-center gap-2 flex-wrap">
+                    <div key={t} className={`glass-card p-4 space-y-3 ${cfg.hidden ? 'opacity-50' : ''}`}>
+                      <div
+                        className="flex items-center gap-2 flex-wrap cursor-pointer select-none"
+                        onClick={() => toggleLeverCollapsed(t)}
+                      >
+                        <ChevronRight className={`w-3.5 h-3.5 text-fg/50 transition-transform ${isCollapsed ? '' : 'rotate-90'}`} />
                         <div className="w-3 h-3 rounded-full" style={{ backgroundColor: cfg.color }} />
-                        <span className="text-sm font-semibold">{cfg.label || t}</span>
-                        {cfg.family && (
-                          <span className="text-[10px] px-1.5 py-0.5 rounded-full bg-navy-700 text-fg/60">{cfg.family}</span>
-                        )}
+                        <span className="text-sm font-semibold">{displayName}</span>
+                        <button
+                          onClick={e => { e.stopPropagation(); updateLeverConfig(t, { hidden: !cfg.hidden }); }}
+                          title={cfg.hidden ? 'Levier masqué — cliquer pour afficher' : 'Levier visible — cliquer pour masquer'}
+                          className={`p-1 rounded-md transition-colors ${cfg.hidden ? 'text-coral-400 hover:bg-coral-400/10' : 'text-fg/40 hover:text-fg/70 hover:bg-fg/10'}`}
+                        >
+                          {cfg.hidden ? <EyeOff className="w-3.5 h-3.5" /> : <Eye className="w-3.5 h-3.5" />}
+                        </button>
                         <span className="ml-auto text-[11px] font-mono">
                           Marge&nbsp;
                           <span className={margin >= 40 ? 'text-teal-400 font-semibold' : margin >= 35 ? 'text-amber-400 font-semibold' : 'text-coral-400 font-semibold'}>
@@ -365,108 +435,112 @@ export default function AdminPanel() {
                         </span>
                       </div>
 
-                      <div className="grid grid-cols-2 sm:grid-cols-3 gap-3">
-                        <div>
-                          <label className="text-[10px] uppercase tracking-wider text-fg/60 mb-1 block">CPM vente (€)</label>
-                          <PlainNumericInput
-                            value={cfg.defaultCpm}
-                            onChange={v => updateLeverConfig(t, { defaultCpm: v })}
-                            min={0}
-                            step={0.1}
-                            className={inputClass}
-                          />
-                        </div>
-                        <div>
-                          <label className="text-[10px] uppercase tracking-wider text-fg/60 mb-1 block">CPM achat (€)</label>
-                          <PlainNumericInput
-                            value={cfg.purchaseCpm ?? 0}
-                            onChange={v => updateLeverConfig(t, { purchaseCpm: v })}
-                            min={0}
-                            step={0.1}
-                            className={inputClass}
-                          />
-                        </div>
-                        <div>
-                          <label className="text-[10px] uppercase tracking-wider text-fg/60 mb-1 block">Budget min/mag (€)</label>
-                          <PlainNumericInput
-                            value={cfg.minBudgetPerStore}
-                            onChange={v => updateLeverConfig(t, { minBudgetPerStore: v })}
-                            min={0}
-                            step={1}
-                            className={inputClass}
-                          />
-                        </div>
-                        <div>
-                          <label className="text-[10px] uppercase tracking-wider text-fg/60 mb-1 block">Couverture max (%)</label>
-                          <PlainNumericInput
-                            value={cfg.maxCoverage}
-                            onChange={v => updateLeverConfig(t, { maxCoverage: v })}
-                            min={0}
-                            max={100}
-                            step={1}
-                            className={inputClass}
-                          />
-                        </div>
-                        <div>
-                          <label className="text-[10px] uppercase tracking-wider text-fg/60 mb-1 block">Poids auto budget</label>
-                          <PlainNumericInput
-                            value={cfg.autoBudgetPercent}
-                            onChange={v => updateLeverConfig(t, { autoBudgetPercent: v })}
-                            min={0}
-                            step={1}
-                            className={inputClass}
-                          />
-                        </div>
-                        <div>
-                          <label className="text-[10px] uppercase tracking-wider text-fg/60 mb-1 block">Couleur</label>
-                          <div className="flex items-center gap-2">
-                            <input
-                              type="color"
-                              value={cfg.color}
-                              onChange={e => updateLeverConfig(t, { color: e.target.value })}
-                              className="w-8 h-8 rounded-lg border border-navy-600/30 bg-transparent cursor-pointer"
-                            />
-                            <span className="text-[10px] text-fg/60 font-mono">{cfg.color}</span>
+                      {!isCollapsed && (
+                        <>
+                          <div className="grid grid-cols-2 sm:grid-cols-3 gap-3">
+                            <div>
+                              <label className="text-[10px] uppercase tracking-wider text-fg/60 mb-1 block">CPM vente (€)</label>
+                              <PlainNumericInput
+                                value={cfg.defaultCpm}
+                                onChange={v => updateLeverConfig(t, { defaultCpm: v })}
+                                min={0}
+                                step={0.1}
+                                className={inputClass}
+                              />
+                            </div>
+                            <div>
+                              <label className="text-[10px] uppercase tracking-wider text-fg/60 mb-1 block">CPM achat (€)</label>
+                              <PlainNumericInput
+                                value={cfg.purchaseCpm ?? 0}
+                                onChange={v => updateLeverConfig(t, { purchaseCpm: v })}
+                                min={0}
+                                step={0.1}
+                                className={inputClass}
+                              />
+                            </div>
+                            <div>
+                              <label className="text-[10px] uppercase tracking-wider text-fg/60 mb-1 block">Budget min/mag (€)</label>
+                              <PlainNumericInput
+                                value={cfg.minBudgetPerStore}
+                                onChange={v => updateLeverConfig(t, { minBudgetPerStore: v })}
+                                min={0}
+                                step={1}
+                                className={inputClass}
+                              />
+                            </div>
+                            <div>
+                              <label className="text-[10px] uppercase tracking-wider text-fg/60 mb-1 block">Couverture max (%)</label>
+                              <PlainNumericInput
+                                value={cfg.maxCoverage}
+                                onChange={v => updateLeverConfig(t, { maxCoverage: v })}
+                                min={0}
+                                max={100}
+                                step={1}
+                                className={inputClass}
+                              />
+                            </div>
+                            <div>
+                              <label className="text-[10px] uppercase tracking-wider text-fg/60 mb-1 block">Poids auto budget</label>
+                              <PlainNumericInput
+                                value={cfg.autoBudgetPercent}
+                                onChange={v => updateLeverConfig(t, { autoBudgetPercent: v })}
+                                min={0}
+                                step={1}
+                                className={inputClass}
+                              />
+                            </div>
+                            <div>
+                              <label className="text-[10px] uppercase tracking-wider text-fg/60 mb-1 block">Couleur</label>
+                              <div className="flex items-center gap-2">
+                                <input
+                                  type="color"
+                                  value={cfg.color}
+                                  onChange={e => updateLeverConfig(t, { color: e.target.value })}
+                                  className="w-8 h-8 rounded-lg border border-navy-600/30 bg-transparent cursor-pointer"
+                                />
+                                <span className="text-[10px] text-fg/60 font-mono">{cfg.color}</span>
+                              </div>
+                            </div>
                           </div>
-                        </div>
-                      </div>
 
-                      <div className="border-t border-fg/10 pt-3 space-y-2">
-                        <label className="text-[10px] uppercase tracking-wider text-fg/60 block">Logo</label>
-                        <p className="text-[10px] text-fg/50 leading-snug">
-                          Affiché comme un logo importé (même cadre partout). Les grandes marques ont un fichier par défaut dans{' '}
-                          <span className="font-mono text-fg/55">/public/levers/</span>.
-                        </p>
-                        <div className="flex flex-wrap items-center gap-3">
-                          <LeverLogoBadge cfg={cfg} className="w-10 h-10" iconClassName="w-5 h-5" />
-                          <div className="flex flex-wrap gap-2">
-                            <button
-                              type="button"
-                              onClick={() => openLeverLogoPicker(t)}
-                              className="inline-flex items-center gap-1.5 px-2.5 py-1.5 rounded-lg border border-navy-600/40 text-[11px] text-fg/80 hover:bg-fg/8 hover:border-teal-400/25 transition-colors"
-                            >
-                              <Image className="w-3.5 h-3.5" />
-                              Importer une image
-                            </button>
-                            {LEVER_CONFIGS[t]?.logoUrl && (
-                              <button
-                                type="button"
-                                onClick={() => updateLeverConfig(t, { logoUrl: null })}
-                                className="px-2.5 py-1.5 rounded-lg border border-navy-600/40 text-[11px] text-fg/70 hover:bg-fg/8 transition-colors"
-                              >
-                                Logo par défaut
-                              </button>
-                            )}
-                            <button
-                              type="button"
-                              onClick={() => updateLeverConfig(t, { logoUrl: '' })}
-                              className="px-2.5 py-1.5 rounded-lg border border-navy-600/40 text-[11px] text-fg/70 hover:bg-fg/8 transition-colors"
-                            >
-                              Icône Lucide seule
-                            </button>
+                          <div className="border-t border-fg/10 pt-3 space-y-2">
+                            <label className="text-[10px] uppercase tracking-wider text-fg/60 block">Logo</label>
+                            <p className="text-[10px] text-fg/50 leading-snug">
+                              Affiché comme un logo importé (même cadre partout). Les grandes marques ont un fichier par défaut dans{' '}
+                              <span className="font-mono text-fg/55">/public/levers/</span>.
+                            </p>
+                            <div className="flex flex-wrap items-center gap-3">
+                              <LeverLogoBadge cfg={cfg} className="w-10 h-10" iconClassName="w-5 h-5" />
+                              <div className="flex flex-wrap gap-2">
+                                <button
+                                  type="button"
+                                  onClick={() => openLeverLogoPicker(t)}
+                                  className="inline-flex items-center gap-1.5 px-2.5 py-1.5 rounded-lg border border-navy-600/40 text-[11px] text-fg/80 hover:bg-fg/8 hover:border-teal-400/25 transition-colors"
+                                >
+                                  <Image className="w-3.5 h-3.5" />
+                                  Importer une image
+                                </button>
+                                {LEVER_CONFIGS[t]?.logoUrl && (
+                                  <button
+                                    type="button"
+                                    onClick={() => updateLeverConfig(t, { logoUrl: null })}
+                                    className="px-2.5 py-1.5 rounded-lg border border-navy-600/40 text-[11px] text-fg/70 hover:bg-fg/8 transition-colors"
+                                  >
+                                    Logo par défaut
+                                  </button>
+                                )}
+                                <button
+                                  type="button"
+                                  onClick={() => updateLeverConfig(t, { logoUrl: '' })}
+                                  className="px-2.5 py-1.5 rounded-lg border border-navy-600/40 text-[11px] text-fg/70 hover:bg-fg/8 transition-colors"
+                                >
+                                  Icône Lucide seule
+                                </button>
+                              </div>
+                            </div>
                           </div>
-                        </div>
-                      </div>
+                        </>
+                      )}
                     </div>
                   );
                 })}
@@ -487,7 +561,10 @@ export default function AdminPanel() {
               <div className="flex items-center justify-between">
                 <div>
                   <h3 className="text-xs font-semibold uppercase tracking-wider text-fg/72">Gestion des magasins</h3>
-                  <p className="text-[11px] text-fg/62">{stores.length} magasin{stores.length > 1 ? 's' : ''} configuré{stores.length > 1 ? 's' : ''}.</p>
+                  <p className="text-[11px] text-fg/62">
+                    {stores.length} magasin{stores.length > 1 ? 's' : ''} configuré{stores.length > 1 ? 's' : ''}. Poids % pour la répartition «&nbsp;Pondéré&nbsp;» sur l’hypothèse (somme {storeWeightTotal}
+                    %, défaut 100 par mag., normalisée si besoin).
+                  </p>
                 </div>
                 <div className="flex items-center gap-2">
                   <input ref={excelInputRef} type="file" accept=".xlsx,.xls" onChange={e => handleExcelUpload(e, 'replace')} className="hidden" />
@@ -513,34 +590,104 @@ export default function AdminPanel() {
                 </div>
               )}
 
-              <div className="space-y-2">
-                {stores.map(store => (
-                  <div key={store.id} className="glass-card px-4 py-3 flex items-center gap-3">
-                    <MapPin className="w-3.5 h-3.5 text-fg/62 shrink-0" />
-                    <input
-                      type="text"
-                      value={store.name}
-                      onChange={e => updateStore(store.id, { name: e.target.value })}
-                      className="flex-1 bg-transparent text-xs text-fg border-b border-transparent hover:border-navy-600/30 focus:border-teal-400/40 focus:outline-none py-1"
-                    />
-                    <div className="flex items-center gap-2">
-                      <label className="text-[10px] text-fg/62">Pop.</label>
-                      <PlainNumericInput
-                        value={store.population}
-                        onChange={v => updateStore(store.id, { population: v })}
-                        min={0}
-                        step={1}
-                        className="w-24 bg-navy-800/60 border border-navy-600/30 rounded-md px-2 py-1 text-[11px] text-fg focus:outline-none focus:border-teal-400/40"
-                      />
-                    </div>
-                    <button
-                      onClick={() => removeStore(store.id)}
-                      className="p-1.5 rounded-md text-red-500 hover:text-red-400 hover:bg-red-500/10 transition-colors shrink-0"
-                    >
-                      <Trash2 className="w-3 h-3" />
-                    </button>
-                  </div>
-                ))}
+              <div className="overflow-x-auto rounded-xl border border-navy-600/20 bg-navy-900/20">
+                <table className="w-full min-w-[520px] text-[11px]">
+                  <thead>
+                    <tr className="text-fg/60 text-left border-b border-fg/12">
+                      <th className="py-2.5 pl-3 pr-2 font-medium align-bottom">
+                        <button
+                          type="button"
+                          onClick={() => toggleStoreSort('name')}
+                          className="inline-flex items-center gap-1 rounded-md hover:text-fg/88 focus:outline-none focus-visible:ring-2 focus-visible:ring-teal-400/40 -my-0.5 -ml-0.5 px-0.5"
+                        >
+                          Magasin
+                          {storeSort.key === 'name' ? (
+                            storeSort.dir === 'asc' ? <ChevronUp className="w-3.5 h-3.5 shrink-0" /> : <ChevronDown className="w-3.5 h-3.5 shrink-0" />
+                          ) : (
+                            <ArrowUpDown className="w-3.5 h-3.5 shrink-0 opacity-40" />
+                          )}
+                        </button>
+                      </th>
+                      <th className="py-2.5 px-2 font-medium whitespace-nowrap align-bottom w-36">
+                        <button
+                          type="button"
+                          onClick={() => toggleStoreSort('population')}
+                          className="inline-flex items-center gap-1 rounded-md hover:text-fg/88 focus:outline-none focus-visible:ring-2 focus-visible:ring-teal-400/40 -my-0.5 -ml-0.5 px-0.5"
+                        >
+                          Pop.
+                          {storeSort.key === 'population' ? (
+                            storeSort.dir === 'asc' ? <ChevronUp className="w-3.5 h-3.5 shrink-0" /> : <ChevronDown className="w-3.5 h-3.5 shrink-0" />
+                          ) : (
+                            <ArrowUpDown className="w-3.5 h-3.5 shrink-0 opacity-40" />
+                          )}
+                        </button>
+                      </th>
+                      <th className="py-2.5 px-2 font-medium whitespace-nowrap align-bottom w-36" title="Poids pour le mode de répartition pondérée (hypothèse)">
+                        <button
+                          type="button"
+                          onClick={() => toggleStoreSort('weight')}
+                          className="inline-flex items-center gap-1 rounded-md hover:text-fg/88 focus:outline-none focus-visible:ring-2 focus-visible:ring-teal-400/40 -my-0.5 -ml-0.5 px-0.5"
+                        >
+                          Poids
+                          {storeSort.key === 'weight' ? (
+                            storeSort.dir === 'asc' ? <ChevronUp className="w-3.5 h-3.5 shrink-0" /> : <ChevronDown className="w-3.5 h-3.5 shrink-0" />
+                          ) : (
+                            <ArrowUpDown className="w-3.5 h-3.5 shrink-0 opacity-40" />
+                          )}
+                        </button>
+                      </th>
+                      <th className="py-2.5 pr-3 w-10 font-medium text-right text-fg/45 align-bottom" aria-label="Supprimer" />
+                    </tr>
+                  </thead>
+                  <tbody>
+                    {sortedStores.map(store => (
+                      <tr key={store.id} className="border-t border-fg/8 hover:bg-fg/[0.03]">
+                        <td className="py-2.5 pl-3 pr-2 align-middle">
+                          <div className="flex items-center gap-2 min-w-0">
+                            <MapPin className="w-3.5 h-3.5 text-fg/62 shrink-0" />
+                            <input
+                              type="text"
+                              value={store.name}
+                              onChange={e => updateStore(store.id, { name: e.target.value })}
+                              className="w-full min-w-0 max-w-md bg-navy-800/50 border border-navy-600/25 rounded-md px-2 py-1 text-xs text-fg focus:outline-none focus:border-teal-400/40"
+                            />
+                          </div>
+                        </td>
+                        <td className="py-2.5 px-2 align-middle">
+                          <PlainNumericInput
+                            value={store.population}
+                            onChange={v => updateStore(store.id, { population: v })}
+                            min={0}
+                            step={1}
+                            className="w-full max-w-[7rem] bg-navy-800/60 border border-navy-600/30 rounded-md px-2 py-1 text-[11px] text-fg focus:outline-none focus:border-teal-400/40"
+                          />
+                        </td>
+                        <td className="py-2.5 px-2 align-middle">
+                          <div className="flex items-center gap-1">
+                            <PlainNumericInput
+                              value={store.budgetWeightPercent ?? defaultStoreWeight}
+                              onChange={v => updateStore(store.id, { budgetWeightPercent: Math.max(0, v) })}
+                              min={0}
+                              max={1000}
+                              step={0.1}
+                              className="w-full max-w-[5.5rem] bg-navy-800/60 border border-navy-600/30 rounded-md px-2 py-1 text-[11px] text-fg font-mono focus:outline-none focus:border-teal-400/40"
+                            />
+                            <span className="text-[10px] text-fg/45">%</span>
+                          </div>
+                        </td>
+                        <td className="py-2.5 pr-3 align-middle text-right">
+                          <button
+                            type="button"
+                            onClick={() => removeStore(store.id)}
+                            className="p-1.5 rounded-md text-red-500 hover:text-red-400 hover:bg-red-500/10 transition-colors"
+                          >
+                            <Trash2 className="w-3 h-3" />
+                          </button>
+                        </td>
+                      </tr>
+                    ))}
+                  </tbody>
+                </table>
               </div>
 
               <div className="flex gap-2">
@@ -594,15 +741,15 @@ export default function AdminPanel() {
                 </div>
 
                 <div>
-                  <label className="text-[10px] uppercase tracking-wider text-fg/60 mb-1 block">Budget total par défaut (€)</label>
+                  <label className="text-[10px] uppercase tracking-wider text-fg/60 mb-1 block">Budget typique par magasin (€)</label>
                   <PlainNumericInput
-                    value={globalParams.defaultTotalBudget}
-                    onChange={v => updateGlobalParams({ defaultTotalBudget: v })}
+                    value={globalParams.typicalBudgetPerStore}
+                    onChange={v => updateGlobalParams({ typicalBudgetPerStore: v })}
                     min={0}
-                    step={1000}
+                    step={100}
                     className={inputClass}
                   />
-                  <p className="text-[10px] text-fg/55 mt-1">Budget total utilisé par défaut à la création d'une nouvelle hypothèse.</p>
+                  <p className="text-[10px] text-fg/55 mt-1">Multiplié par le nombre de magasins pour définir le budget total par défaut d'une nouvelle hypothèse.</p>
                 </div>
 
                 <div>
@@ -618,15 +765,15 @@ export default function AdminPanel() {
                 </div>
 
                 <div>
-                  <label className="text-[10px] uppercase tracking-wider text-fg/60 mb-1 block">Valeur max du slider Budget (€)</label>
+                  <label className="text-[10px] uppercase tracking-wider text-fg/60 mb-1 block">Valeur max du slider Budget par magasin (€)</label>
                   <PlainNumericInput
-                    value={globalParams.maxBudgetSlider}
-                    onChange={v => updateGlobalParams({ maxBudgetSlider: v })}
-                    min={1000}
-                    step={1000}
+                    value={globalParams.maxBudgetSliderPerStore}
+                    onChange={v => updateGlobalParams({ maxBudgetSliderPerStore: v })}
+                    min={100}
+                    step={100}
                     className={inputClass}
                   />
-                  <p className="text-[10px] text-fg/55 mt-1">Valeur maximale affichée sur le slider de budget par levier.</p>
+                  <p className="text-[10px] text-fg/55 mt-1">Multiplié par le nombre de magasins pour définir le max du slider de budget par levier.</p>
                 </div>
 
                 <div>
@@ -643,7 +790,7 @@ export default function AdminPanel() {
                 </div>
               </div>
 
-              <h3 className="text-xs font-semibold uppercase tracking-wider text-fg/72 pt-2">Récapitulatif des coefficients</h3>
+              <h3 className="text-xs font-semibold uppercase tracking-wider text-fg/72 pt-2">Récapitulatif des leviers</h3>
               <div className="glass-card p-4">
                 <table className="w-full text-[11px]">
                   <thead>
@@ -657,19 +804,28 @@ export default function AdminPanel() {
                     </tr>
                   </thead>
                   <tbody className="text-fg/88">
-                    {LEVER_TYPES.map(type => {
+                    {[...LEVER_TYPES].sort((a, b) => {
+                      const ca = leverConfigs[a as LeverType];
+                      const cb = leverConfigs[b as LeverType];
+                      const aLegacy = ca?.family === 'Legacy' ? 1 : 0;
+                      const bLegacy = cb?.family === 'Legacy' ? 1 : 0;
+                      if (aLegacy !== bLegacy) return aLegacy - bLegacy;
+                      const nameA = ca?.family && ca.family !== 'Legacy' ? `${ca.family} - ${ca.label || a}` : (ca?.label || a);
+                      const nameB = cb?.family && cb.family !== 'Legacy' ? `${cb.family} - ${cb.label || b}` : (cb?.label || b);
+                      return nameA.localeCompare(nameB, 'fr');
+                    }).map(type => {
                       const cfg = leverConfigs[type];
                       if (!cfg) return null;
                       const margin = cfg.defaultCpm > 0 ? ((cfg.defaultCpm - (cfg.purchaseCpm ?? 0)) / cfg.defaultCpm) * 100 : 0;
                       return (
-                        <tr key={type} className="border-t border-fg/12">
+                        <tr key={type} className={`border-t border-fg/12 ${cfg.hidden ? 'opacity-35' : ''}`}>
                           <td className="py-2 flex items-center gap-2">
                             <div className="w-2 h-2 rounded-full" style={{ backgroundColor: cfg.color }} />
-                            {cfg.label || type}
+                            {cfg.family && cfg.family !== 'Legacy' ? `${cfg.family} - ${cfg.label || type}` : (cfg.label || type)}
                           </td>
                           <td className="py-2">{cfg.defaultCpm.toFixed(2)}€</td>
                           <td className="py-2">{(cfg.purchaseCpm ?? 0).toFixed(2)}€</td>
-                          <td className={`py-2 font-semibold ${margin >= 40 ? 'text-teal-400' : margin >= 35 ? 'text-amber-400' : 'text-coral-400'}`}>{margin.toFixed(1)}%</td>
+                          <td className={`py-2 font-semibold ${cfg.hidden ? '' : margin >= 40 ? 'text-teal-400' : margin >= 35 ? 'text-amber-400' : 'text-coral-400'}`}>{margin.toFixed(1)}%</td>
                           <td className="py-2">{cfg.minBudgetPerStore}€</td>
                           <td className="py-2">{cfg.maxCoverage}%</td>
                         </tr>
@@ -752,6 +908,56 @@ export default function AdminPanel() {
         </div>
       </div>
     </div>
+
+    {presetPendingDelete && (
+      <div
+        className="fixed inset-0 z-[100] flex items-center justify-center p-4 bg-black/55 backdrop-blur-[2px]"
+        role="dialog"
+        aria-modal="true"
+        aria-labelledby="admin-delete-preset-title"
+        onClick={() => setPresetPendingDelete(null)}
+      >
+        <div
+          className="glass-card max-w-md w-full p-4 shadow-2xl border border-red-500/25 animate-fade-in"
+          onClick={e => e.stopPropagation()}
+        >
+          <div className="flex items-start gap-3">
+            <div className="w-8 h-8 rounded-full bg-red-500/15 flex items-center justify-center shrink-0">
+              <AlertTriangle className="w-4 h-4 text-red-400" />
+            </div>
+            <div className="flex-1 min-w-0">
+              <h2 id="admin-delete-preset-title" className="text-sm font-semibold text-fg">
+                Supprimer ce preset&nbsp;?
+              </h2>
+              <p className="text-xs text-fg/75 mt-2 leading-relaxed">
+                Le preset <strong className="text-fg/92">« {presetPendingDelete.name} »</strong> sera retiré
+                de la bibliothèque. Cette action est définitive.
+              </p>
+            </div>
+          </div>
+          <div className="flex justify-end gap-2 mt-5">
+            <button
+              type="button"
+              className="px-3 py-1.5 rounded-lg text-xs font-medium text-fg/72 hover:bg-fg/10 transition-colors"
+              onClick={() => setPresetPendingDelete(null)}
+            >
+              Annuler
+            </button>
+            <button
+              type="button"
+              className="px-4 py-2 rounded-lg text-xs font-semibold bg-red-500 text-white shadow-md shadow-black/25 hover:bg-red-400 focus:outline-none focus-visible:ring-2 focus-visible:ring-white/80 focus-visible:ring-offset-2 focus-visible:ring-offset-navy-900 transition-colors"
+              onClick={() => {
+                removePreset(presetPendingDelete.id, removeCtx);
+                setPresetPendingDelete(null);
+              }}
+            >
+              Supprimer
+            </button>
+          </div>
+        </div>
+      </div>
+    )}
+    </>
   );
 }
 

@@ -5,6 +5,9 @@ export type BudgetMode = 'automatique' | 'levier' | 'pctTotal' | 'libre' | 'v3-l
 
 export type ZoneId = 'zone1' | 'zone2' | 'zone3';
 
+/** Comment le budget total d’hypothèse est ventilé entre les points de vente (récap / tableaux). */
+export type StoreDistributionMode = 'egal' | 'population' | 'pondere';
+
 export interface Lever {
   id: string;
   type: LeverType;
@@ -36,6 +39,8 @@ export interface Hypothesis {
   zoneId: ZoneId;
   /** Rétrocommission appliquée sur le budget total (en %). */
   retrocommissionPercent?: number;
+  /** Répartition du budget total entre magasins (défaut : égal). */
+  storeDistributionMode?: StoreDistributionMode;
 }
 
 export interface Prestation {
@@ -83,6 +88,8 @@ export interface Store {
   id: string;
   name: string;
   population: number;
+  /** Poids en % pour le mode « pondéré » (Admin → magasins). La somme peut différer de 100 : normalisation à l’application. */
+  budgetWeightPercent?: number;
 }
 
 export interface LeverConfig {
@@ -99,6 +106,8 @@ export interface LeverConfig {
   color: string;
   icon: string;
   autoBudgetPercent: number;
+  /** Masquer ce levier dans le sélecteur de leviers. */
+  hidden?: boolean;
   /** Image (URL, `/levers/…` ou data URL). `undefined`/`null` → logo par défaut du levier si défini ; `''` → icône Lucide uniquement. */
   logoUrl?: string | null;
 }
@@ -106,8 +115,8 @@ export interface LeverConfig {
 export interface GlobalParams {
   defaultPopulation: number;
   maxBudgetPerStore: number;
-  defaultTotalBudget: number;
-  maxBudgetSlider: number;
+  typicalBudgetPerStore: number;
+  maxBudgetSliderPerStore: number;
   maxRepetitionSlider: number;
 }
 

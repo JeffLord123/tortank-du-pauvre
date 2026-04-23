@@ -99,6 +99,9 @@ function diffHypothesis(prev: Hypothesis, next: Hypothesis): string | null {
   if (prev.totalBudget !== next.totalBudget) return `Budget total · ${next.name} : ${fmtNum(prev.totalBudget)}€ → ${fmtNum(next.totalBudget)}€`;
   if (prev.maxBudgetPerStore !== next.maxBudgetPerStore) return `Budget max/mag · ${next.name} : ${fmtNum(prev.maxBudgetPerStore)}€ → ${fmtNum(next.maxBudgetPerStore)}€`;
   if (prev.zoneId !== next.zoneId) return `Zone · ${next.name} : ${prev.zoneId} → ${next.zoneId}`;
+  if ((prev.storeDistributionMode ?? 'egal') !== (next.storeDistributionMode ?? 'egal')) {
+    return `Répartition magasins · ${next.name} : ${prev.storeDistributionMode ?? 'egal'} → ${next.storeDistributionMode ?? 'egal'}`;
+  }
 
   const prevLevers = byId(prev.levers);
   const nextLevers = byId(next.levers);
@@ -145,8 +148,8 @@ function diffSimulation(prev: Simulation | null, next: Simulation | null): strin
 function diffGlobalParams(a: GlobalParams, b: GlobalParams): string | null {
   if (a.defaultPopulation !== b.defaultPopulation) return `Population moyenne : ${fmtNum(a.defaultPopulation)} → ${fmtNum(b.defaultPopulation)}`;
   if (a.maxBudgetPerStore !== b.maxBudgetPerStore) return `Budget max/mag (global) : ${fmtNum(a.maxBudgetPerStore)}€ → ${fmtNum(b.maxBudgetPerStore)}€`;
-  if (a.defaultTotalBudget !== b.defaultTotalBudget) return `Budget total défaut : ${fmtNum(a.defaultTotalBudget)}€ → ${fmtNum(b.defaultTotalBudget)}€`;
-  if (a.maxBudgetSlider !== b.maxBudgetSlider) return `Max slider budget : ${fmtNum(a.maxBudgetSlider)}€ → ${fmtNum(b.maxBudgetSlider)}€`;
+  if (a.typicalBudgetPerStore !== b.typicalBudgetPerStore) return `Budget typique/mag : ${fmtNum(a.typicalBudgetPerStore)}€ → ${fmtNum(b.typicalBudgetPerStore)}€`;
+  if (a.maxBudgetSliderPerStore !== b.maxBudgetSliderPerStore) return `Max slider budget/mag : ${fmtNum(a.maxBudgetSliderPerStore)}€ → ${fmtNum(b.maxBudgetSliderPerStore)}€`;
   if (a.maxRepetitionSlider !== b.maxRepetitionSlider) return `Max slider répétition : ${fmtNum(a.maxRepetitionSlider)} → ${fmtNum(b.maxRepetitionSlider)}`;
   return null;
 }

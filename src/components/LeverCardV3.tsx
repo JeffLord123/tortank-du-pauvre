@@ -23,6 +23,7 @@ export default function LeverCardV3({ lever, hypothesis, index, budgetLocked, on
 
   const sc = stores.length || 1;
   const avgPop = (globalParams.defaultPopulation || 140000) * getZoneMultiplier(hypothesis.zoneId);
+  const sliderMax = (globalParams.maxBudgetSliderPerStore || 3000) * sc;
 
   // Budget display unit: € or % (only when budget is locked)
   const [budgetUnit, setBudgetUnit] = useState<'€' | '%'>('€');
@@ -255,7 +256,7 @@ export default function LeverCardV3({ lever, hypothesis, index, budgetLocked, on
             <div>
               <div className="flex items-center justify-between mb-1">
                 <label className="text-[10px] uppercase tracking-wider text-amber-400">Budget levier</label>
-                <span className="text-[10px] text-fg/62">max admin : {formatNum(globalParams.maxBudgetSlider)} €</span>
+                <span className="text-[10px] text-fg/62">max admin : {formatNum(sliderMax)} €</span>
               </div>
               <div className="flex items-center gap-2">
                 <BudgetLockBtn />
@@ -264,7 +265,7 @@ export default function LeverCardV3({ lever, hypothesis, index, budgetLocked, on
                   <div className="flex-1 flex items-center gap-2">
                     <SliderWithTooltip
                       min={0}
-                      max={globalParams.maxBudgetSlider}
+                      max={sliderMax}
                       step={100}
                       value={displayBudget}
                       label={`${formatNum(displayBudget)} €`}
@@ -291,7 +292,7 @@ export default function LeverCardV3({ lever, hypothesis, index, budgetLocked, on
                     <div className="flex-1">
                       <SliderWithTooltip
                         min={0}
-                        max={globalParams.maxBudgetSlider}
+                        max={sliderMax}
                         step={100}
                         value={displayBudget}
                         label={`${formatNum(displayBudget)} €`}

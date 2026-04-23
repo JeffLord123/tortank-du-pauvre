@@ -1,9 +1,25 @@
-import { useState, useRef } from 'react';
+import { useState, useRef, useMemo, useCallback, useEffect } from 'react';
 import { createPortal } from 'react-dom';
 import { useSimulationStore } from '../store/simulationStore';
 import { useVersionStore } from '../store/versionStore';
 import { PieChart, Pie, Cell, ResponsiveContainer, Tooltip, BarChart, Bar, XAxis, YAxis, CartesianGrid } from 'recharts';
-import { TrendingUp, TrendingDown, Hash, Eye, Repeat, Layers, Store, Info, Target, Percent, CheckCircle2, AlertTriangle } from 'lucide-react';
+import {
+  TrendingUp,
+  TrendingDown,
+  Hash,
+  Eye,
+  Repeat,
+  Layers,
+  Store,
+  Info,
+  Target,
+  Percent,
+  CheckCircle2,
+  AlertTriangle,
+  Table2,
+  X,
+  ChevronsUpDown,
+} from 'lucide-react';
 import { formatNum, formatImpressions } from '../utils/formatNum';
 import { getMarginThreshold } from '../data/defaults';
 import NumInput from './NumInput';
@@ -168,9 +184,215 @@ function CoverageRepKPI({ coverage, avgRepetition, detail }: { coverage: number;
   );
 }
 
+type StoreBudgetRow = {
+  id: string;
+  name: string;
+  population: number;
+  weightPercent: number;
+  budget: number;
+  coverage: number;
+  repetition: number;
+};
+type StoreSortKey = 'name' | 'population' | 'weight' | 'budget' | 'coverage' | 'repetition';
+
+function StoreBudgetsDialog({
+  open,
+  onClose,
+  rows,
+  hypothesisName,
+}: {
+  open: boolean;
+  onClose: () => void;
+  rows: StoreBudgetRow[];
+  hypothesisName: string;
+}) {
+  const [sortKey, setSortKey] = useState<StoreSortKey>('budget');
+  const [sortDir, setSortDir] = useState<'asc' | 'desc'>('desc');
+
+  const sortedRows = useMemo(() => {
+    const copy = [...rows];
+    const m = sortDir === 'asc' ? 1 : -1;
+    copy.sort((a, b) => {
+      if (sortKey === 'name') return m * a.name.localeCompare(b.name, 'fr', { sensitivity: 'base' });
+      if (sortKey === 'population') return m * (a.population - b.population);
+      if (sortKey === 'weight') return m * (a.weightPercent - b.weightPercent);
+      if (sortKey === 'coverage') return m * (a.coverage - b.coverage);
+      if (sortKey === 'repetition') return m * (a.repetition - b.repetition);
+      return m * (a.budget - b.budget);
+    });
+    return copy;
+  }, [rows, sortKey, sortDir]);
+
+  const onSort = useCallback(
+    (key: StoreSortKey) => {
+      if (key === sortKey) setSortDir(d => (d === 'asc' ? 'desc' : 'asc'));
+      else {
+        setSortKey(key);
+        setSortDir(key === 'name' ? 'asc' : 'desc');
+      }
+    },
+    [sortKey],
+  );
+
+  useEffect(() => {
+    if (open) {
+      setSortKey('budget');
+      setSortDir('desc');
+    }
+  }, [open]);
+
+  if (!open) return null;
+
+  // Portail : le parent du récap a `animate-slide-in` (transform) ce qui
+  // requalifie `position: fixed` sur le conteneur du panel au lieu de la fenêtre.
+  return createPortal(
+    <div
+      className="fixed inset-0 z-[60] flex items-center justify-center p-4 bg-black/60 backdrop-blur-sm"
+      onClick={onClose}
+    >
+      <div
+        className="bg-navy-900 border border-navy-600/50 rounded-2xl shadow-2xl w-full max-w-3xl max-h-[85vh] flex flex-col overflow-hidden animate-fade-in"
+        onClick={e => e.stopPropagation()}
+      >
+        <div className="flex items-center justify-between px-4 py-4 border-b border-fg/12 shrink-0">
+          <div className="flex items-center gap-3 min-w-0">
+            <div className="w-8 h-8 rounded-lg bg-teal-400/10 flex items-center justify-center shrink-0">
+              <Table2 className="w-4 h-4 text-teal-400" />
+            </div>
+            <div className="min-w-0">
+              <h2 className="text-sm font-bold truncate">Points de vente — budgets</h2>
+              <p className="text-[10px] text-fg/60 truncate">{hypothesisName}</p>
+            </div>
+          </div>
+          <button
+            type="button"
+            onClick={onClose}
+            className="p-2 rounded-lg hover:bg-fg/10 text-fg/72 hover:text-fg transition-colors shrink-0"
+            aria-label="Fermer"
+          >
+            <X className="w-4 h-4" />
+          </button>
+        </div>
+        <div className="overflow-auto flex-1 min-h-0 px-4 py-3">
+          <table className="w-full text-left text-xs border-collapse">
+            <thead>
+              <tr className="border-b border-fg/12 text-[10px] uppercase tracking-wider text-fg/55">
+                <th className="py-2 pr-3 font-medium w-10">#</th>
+                <th className="py-2 pr-3 font-medium">
+                  <button
+                    type="button"
+                    onClick={() => onSort('name')}
+                    className="inline-flex items-center gap-1 hover:text-fg/88 transition-colors"
+                  >
+                    Magasin
+                    <SortGlyph active={sortKey === 'name'} dir={sortDir} />
+                  </button>
+                </th>
+                <th className="py-2 pr-3 font-medium text-right w-32">
+                  <div className="flex justify-end">
+                    <button
+                      type="button"
+                      onClick={() => onSort('population')}
+                      className="inline-flex items-center gap-1 hover:text-fg/88 transition-colors"
+                    >
+                      Population
+                      <SortGlyph active={sortKey === 'population'} dir={sortDir} />
+                    </button>
+                  </div>
+                </th>
+                <th
+                  className="py-2 pr-3 font-medium text-right w-24"
+                  title="Pondération (poids % dans Admin → Magasins). Sert au mode de répartition « Pondéré »."
+                >
+                  <div className="flex justify-end">
+                    <button
+                      type="button"
+                      onClick={() => onSort('weight')}
+                      className="inline-flex items-center gap-1 hover:text-fg/88 transition-colors"
+                    >
+                      Poids
+                      <SortGlyph active={sortKey === 'weight'} dir={sortDir} />
+                    </button>
+                  </div>
+                </th>
+                <th className="py-2 pr-3 font-medium text-right w-24">
+                  <div className="flex justify-end">
+                    <button
+                      type="button"
+                      onClick={() => onSort('coverage')}
+                      className="inline-flex items-center gap-1 hover:text-fg/88 transition-colors"
+                    >
+                      Couv.
+                      <SortGlyph active={sortKey === 'coverage'} dir={sortDir} />
+                    </button>
+                  </div>
+                </th>
+                <th className="py-2 pr-3 font-medium text-right w-24">
+                  <div className="flex justify-end">
+                    <button
+                      type="button"
+                      onClick={() => onSort('repetition')}
+                      className="inline-flex items-center gap-1 hover:text-fg/88 transition-colors"
+                    >
+                      Rép.
+                      <SortGlyph active={sortKey === 'repetition'} dir={sortDir} />
+                    </button>
+                  </div>
+                </th>
+                <th className="py-2 font-medium text-right w-32">
+                  <div className="flex justify-end">
+                    <button
+                      type="button"
+                      onClick={() => onSort('budget')}
+                      className="inline-flex items-center gap-1 hover:text-fg/88 transition-colors"
+                    >
+                      Budget
+                      <SortGlyph active={sortKey === 'budget'} dir={sortDir} />
+                    </button>
+                  </div>
+                </th>
+              </tr>
+            </thead>
+            <tbody>
+              {sortedRows.length === 0 ? (
+                <tr>
+                  <td colSpan={7} className="py-8 text-center text-fg/50">
+                    Aucun magasin
+                  </td>
+                </tr>
+              ) : (
+                sortedRows.map((row, i) => (
+                  <tr key={row.id} className="border-b border-fg/8 hover:bg-fg/5">
+                    <td className="py-2 pr-3 text-fg/45 font-mono tabular-nums">{i + 1}</td>
+                    <td className="py-2 pr-3 text-fg/90 align-top break-words max-w-[min(280px,50vw)]">{row.name}</td>
+                    <td className="py-2 pr-3 text-right font-mono text-fg/82 tabular-nums">{formatNum(row.population)}</td>
+                    <td className="py-2 pr-3 text-right font-mono text-fg/82 tabular-nums">
+                      {new Intl.NumberFormat('fr-FR', { maximumFractionDigits: 1, minimumFractionDigits: 0 }).format(row.weightPercent)}&nbsp;%
+                    </td>
+                    <td className="py-2 pr-3 text-right font-mono text-fg/82 tabular-nums">{row.coverage}%</td>
+                    <td className="py-2 pr-3 text-right font-mono text-fg/82 tabular-nums">{row.repetition}×</td>
+                    <td className="py-2 text-right font-mono text-teal-400/95 tabular-nums">{formatNum(row.budget)} €</td>
+                  </tr>
+                ))
+              )}
+            </tbody>
+          </table>
+        </div>
+      </div>
+    </div>,
+    document.body,
+  );
+}
+
+function SortGlyph({ active, dir }: { active: boolean; dir: 'asc' | 'desc' }) {
+  if (!active) return <ChevronsUpDown className="w-3 h-3 text-fg/35" />;
+  return <span className="text-teal-400 font-mono text-[10px]">{dir === 'asc' ? '↑' : '↓'}</span>;
+}
+
 export default function SummaryPanel() {
   const { simulation, activeHypothesisId, getHypothesisSummary, updateHypothesis } = useSimulationStore();
   const activeVersion = useVersionStore(s => s.activeVersion);
+  const [storeTableOpen, setStoreTableOpen] = useState(false);
 
   if (!simulation || !activeHypothesisId) return null;
 
@@ -288,24 +510,43 @@ export default function SummaryPanel() {
       {/* Store extremes */}
       <div className="glass-card p-3 space-y-2">
         <div className="flex items-center gap-2 mb-1">
-          <Store className="w-3.5 h-3.5 text-fg/60" />
+          <Store className="w-3.5 h-3.5 text-fg/60 shrink-0" />
           <span className="text-[10px] uppercase tracking-wider text-fg/60">Points de vente</span>
+          <button
+            type="button"
+            onClick={() => setStoreTableOpen(true)}
+            className="ml-auto flex items-center gap-1.5 text-[10px] uppercase tracking-wider text-teal-400/90 hover:text-teal-300 px-2 py-1 rounded-lg border border-teal-400/25 hover:border-teal-400/45 bg-teal-400/5 transition-colors"
+          >
+            <Table2 className="w-3 h-3" />
+            Détail
+          </button>
         </div>
-        <div className="flex items-center justify-between text-xs">
-          <div className="flex items-center gap-2">
-            <TrendingDown className="w-3 h-3 text-coral-400" />
-            <span className="text-fg/82 truncate max-w-[120px]">{summary.minStore.name}</span>
+        <div className="flex items-start justify-between text-xs gap-2">
+          <div className="flex items-start gap-2 min-w-0 flex-1">
+            <TrendingDown className="w-3 h-3 text-coral-400 shrink-0 mt-0.5" />
+            <span className="text-fg/82 min-w-0 break-words line-clamp-2 leading-snug">
+              {summary.minStore.name}
+            </span>
           </div>
-          <span className="font-mono text-coral-400">{formatNum(summary.minStore.budget)}€</span>
+          <span className="font-mono text-coral-400 shrink-0 self-start pt-0.5">{formatNum(summary.minStore.budget)}€</span>
         </div>
-        <div className="flex items-center justify-between text-xs">
-          <div className="flex items-center gap-2">
-            <TrendingUp className="w-3 h-3 text-teal-400" />
-            <span className="text-fg/82 truncate max-w-[120px]">{summary.maxStore.name}</span>
+        <div className="flex items-start justify-between text-xs gap-2">
+          <div className="flex items-start gap-2 min-w-0 flex-1">
+            <TrendingUp className="w-3 h-3 text-teal-400 shrink-0 mt-0.5" />
+            <span className="text-fg/82 min-w-0 break-words line-clamp-2 leading-snug">
+              {summary.maxStore.name}
+            </span>
           </div>
-          <span className="font-mono text-teal-400">{formatNum(summary.maxStore.budget)}€</span>
+          <span className="font-mono text-teal-400 shrink-0 self-start pt-0.5">{formatNum(summary.maxStore.budget)}€</span>
         </div>
       </div>
+
+      <StoreBudgetsDialog
+        open={storeTableOpen}
+        onClose={() => setStoreTableOpen(false)}
+        rows={summary.storeBudgets}
+        hypothesisName={hypothesis.name}
+      />
 
       {/* Pie chart — Recharts 3: ResponsiveContainer needs a positive measured size; minWidth avoids flex 0-width */}
       <div className="glass-card p-4 min-w-0 w-full">

@@ -35,6 +35,7 @@ export default function LeverCard({ lever, hypothesis, index }: Props) {
 
   const sc = stores.length || 1;
   const avgPop = (globalParams.defaultPopulation || 140000) * getZoneMultiplier(hypothesis.zoneId);
+  const sliderMax = (globalParams.maxBudgetSliderPerStore || 3000) * sc;
   // Coverage at which repetition reaches maxRepetitionSlider: cov = impressions / (maxRep * sc * avgPop) * 100
   const maxRepCoverage = lever.impressions > 0
     ? Math.min(100, (lever.impressions / (globalParams.maxRepetitionSlider * sc * avgPop)) * 100)
@@ -152,7 +153,7 @@ export default function LeverCard({ lever, hypothesis, index }: Props) {
                   {isPctEditable ? '% du budget total' : 'Budget'}
                 </label>
                 {isBudgetEditable ? (
-                  <span className="text-[10px] text-fg/62">max admin : {formatNum(globalParams.maxBudgetSlider)} €</span>
+                  <span className="text-[10px] text-fg/62">max admin : {formatNum(sliderMax)} €</span>
                 ) : (
                   <div className="flex items-center gap-2">
                     {pctBudgetSumOver100 && (
@@ -217,7 +218,7 @@ export default function LeverCard({ lever, hypothesis, index }: Props) {
                   <div className="flex-1 relative">
                     <SliderWithTooltip
                       min={0}
-                      max={globalParams.maxBudgetSlider}
+                      max={sliderMax}
                       step={100}
                       value={isDraggingBudget.current ? (localBudget ?? lever.budget) : lever.budget}
                       label={`${formatNum(isDraggingBudget.current ? (localBudget ?? lever.budget) : lever.budget)} €`}
@@ -252,7 +253,7 @@ export default function LeverCard({ lever, hypothesis, index }: Props) {
                   <div className="flex-1 relative group">
                     <SliderWithTooltip
                       min={0}
-                      max={globalParams.maxBudgetSlider}
+                      max={sliderMax}
                       step={100}
                       value={lever.budget}
                       label={`${formatNum(lever.budget)} €`}

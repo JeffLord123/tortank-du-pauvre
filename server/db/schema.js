@@ -23,7 +23,8 @@ export function initDB() {
       color                TEXT    NOT NULL,
       icon                 TEXT    NOT NULL,
       auto_budget_percent  INTEGER NOT NULL,
-      logo_url             TEXT
+      logo_url             TEXT,
+      hidden               INTEGER NOT NULL DEFAULT 0
     );
 
     CREATE TABLE IF NOT EXISTS stores (
@@ -154,9 +155,12 @@ export function initDB() {
   try { db.exec(`ALTER TABLE levers ADD COLUMN purchase_cpm REAL NOT NULL DEFAULT 0`); } catch {}
   try { db.exec(`ALTER TABLE preset_levers ADD COLUMN purchase_cpm REAL NOT NULL DEFAULT 0`); } catch {}
   try { db.exec(`ALTER TABLE hypotheses ADD COLUMN retrocommission_percent REAL NOT NULL DEFAULT 0`); } catch {}
+  try { db.exec(`ALTER TABLE lever_configs ADD COLUMN hidden INTEGER NOT NULL DEFAULT 0`); } catch {}
+  try { db.exec(`ALTER TABLE stores ADD COLUMN budget_weight_percent REAL`); } catch {}
+  try { db.exec(`ALTER TABLE hypotheses ADD COLUMN store_distribution_mode TEXT NOT NULL DEFAULT 'egal'`); } catch {}
 
   // ── Seed initial data ─────────────────────────────────────────
-  db.prepare(`INSERT OR IGNORE INTO global_params (id, default_population, max_budget_per_store, default_total_budget, max_budget_slider, max_repetition_slider) VALUES (1, 140000, 50000, 500000, 500000, 10)`).run();
+  db.prepare(`INSERT OR IGNORE INTO global_params (id, default_population, max_budget_per_store, default_total_budget, max_budget_slider, max_repetition_slider) VALUES (1, 140000, 10000, 1500, 3000, 20)`).run();
 
   const seedLeverConfigs = [
     // Legacy
@@ -170,32 +174,41 @@ export function initDB() {
     { type: 'TikTok',    label: 'TikTok',    family: 'Legacy', default_cpm: 6.00, purchase_cpm: 0,    min_budget_per_store: 130, max_coverage: 55, color: '#06b6d4', icon: 'Music',    auto_budget_percent: 5  },
 
     // Ratecard Mobsuccess — Display Mobile
-    { type: 'DisplayMobile-Interstitiel', label: 'Interstitiel',         family: 'Display Mobile', default_cpm: 11.00, purchase_cpm: 5.00,  min_budget_per_store: 120, max_coverage: 65, color: '#00e5a0', icon: 'Monitor', auto_budget_percent: 15 },
-    { type: 'DisplayMobile-Pave',         label: 'Pavé',                 family: 'Display Mobile', default_cpm: 5.00,  purchase_cpm: 2.00,  min_budget_per_store: 120, max_coverage: 65, color: '#00c48c', icon: 'Monitor', auto_budget_percent: 5  },
-    { type: 'DisplayMobile-Banner',       label: 'Banner',               family: 'Display Mobile', default_cpm: 2.50,  purchase_cpm: 1.00,  min_budget_per_store: 120, max_coverage: 65, color: '#00a775', icon: 'Monitor', auto_budget_percent: 5  },
-    { type: 'DisplayMobile-Mixed',        label: 'Mixed format',         family: 'Display Mobile', default_cpm: 9.00,  purchase_cpm: 3.25,  min_budget_per_store: 120, max_coverage: 65, color: '#00e5a0', icon: 'Monitor', auto_budget_percent: 15 },
+    { type: 'DisplayMobile-Interstitiel', label: 'Interstitiel',         family: 'Display Mobile', default_cpm: 11.00, purchase_cpm: 5.00,  min_budget_per_store: 120, max_coverage: 65, color: '#00e5a0', icon: 'Monitor', auto_budget_percent: 77  },
+    { type: 'DisplayMobile-Pave',         label: 'Pavé',                 family: 'Display Mobile', default_cpm: 5.00,  purchase_cpm: 2.00,  min_budget_per_store: 120, max_coverage: 65, color: '#00c48c', icon: 'Monitor', auto_budget_percent: 22  },
+    { type: 'DisplayMobile-Banner',       label: 'Banner',               family: 'Display Mobile', default_cpm: 2.50,  purchase_cpm: 1.00,  min_budget_per_store: 120, max_coverage: 65, color: '#00a775', icon: 'Monitor', auto_budget_percent: 11  },
+    { type: 'DisplayMobile-Mixed',        label: 'Mixed format',         family: 'Display Mobile', default_cpm: 9.00,  purchase_cpm: 3.30,  min_budget_per_store: 120, max_coverage: 65, color: '#00e5a0', icon: 'Monitor', auto_budget_percent: 110 },
 
     // Meta
-    { type: 'Meta-Reach',  label: 'Reach',        family: 'Meta', default_cpm: 2.00, purchase_cpm: 0.80, min_budget_per_store: 150, max_coverage: 75, color: '#667eea', icon: 'Facebook', auto_budget_percent: 15 },
-    { type: 'Meta-Trafic', label: 'Trafic',       family: 'Meta', default_cpm: 5.00, purchase_cpm: 3.00, min_budget_per_store: 150, max_coverage: 75, color: '#7c8eec', icon: 'Facebook', auto_budget_percent: 5  },
-    { type: 'Meta-Mixed',  label: 'Mixed format', family: 'Meta', default_cpm: 4.00, purchase_cpm: 1.90, min_budget_per_store: 150, max_coverage: 75, color: '#667eea', icon: 'Facebook', auto_budget_percent: 15 },
+    { type: 'Meta-Reach',  label: 'Reach',        family: 'Meta', default_cpm: 2.00, purchase_cpm: 0.80, min_budget_per_store: 150, max_coverage: 75, color: '#667eea', icon: 'Facebook', auto_budget_percent: 55 },
+    { type: 'Meta-Trafic', label: 'Trafic',       family: 'Meta', default_cpm: 5.00, purchase_cpm: 3.00, min_budget_per_store: 150, max_coverage: 75, color: '#7c8eec', icon: 'Facebook', auto_budget_percent: 55 },
+    { type: 'Meta-Mixed',  label: 'Mixed format', family: 'Meta', default_cpm: 4.00, purchase_cpm: 1.90, min_budget_per_store: 150, max_coverage: 75, color: '#667eea', icon: 'Facebook', auto_budget_percent: 60 },
 
     // CTV
-    { type: 'CTV-Mixed',           label: 'Mixed format',           family: 'CTV', default_cpm: 16.00, purchase_cpm: 9.33,  min_budget_per_store: 300, max_coverage: 55, color: '#a855f7', icon: 'Tv', auto_budget_percent: 10 },
-    { type: 'CTV-BroadcasterOnly', label: 'Mixed Broadcaster only', family: 'CTV', default_cpm: 20.00, purchase_cpm: 12.00, min_budget_per_store: 300, max_coverage: 55, color: '#c084fc', icon: 'Tv', auto_budget_percent: 5  },
+    { type: 'CTV-Mixed',           label: 'Mixed format',           family: 'CTV', default_cpm: 16.00, purchase_cpm: 9.33,  min_budget_per_store: 300, max_coverage: 55, color: '#a855f7', icon: 'Tv', auto_budget_percent: 90 },
+    { type: 'CTV-BroadcasterOnly', label: 'Mixed Broadcaster only', family: 'CTV', default_cpm: 20.00, purchase_cpm: 12.00, min_budget_per_store: 300, max_coverage: 55, color: '#c084fc', icon: 'Tv', auto_budget_percent: 90 },
 
-    // VOL
-    { type: 'VOL-Mixed', label: 'Mixed format', family: 'VOL', default_cpm: 10.00, purchase_cpm: 4.50, min_budget_per_store: 200, max_coverage: 60, color: '#ef4444', icon: 'Youtube', auto_budget_percent: 10 },
+    // Display Desktop
+    { type: 'DisplayDesktop-Mixed', label: 'Mixed format', family: 'Display Desktop', default_cpm: 9.00, purchase_cpm: 3.30, min_budget_per_store: 120, max_coverage: 65, color: '#00b4d8', icon: 'Laptop', auto_budget_percent: 60 },
+
+    // Youtube (ex-VOL)
+    { type: 'VOL-Mixed', label: 'Youtube seul', family: 'Youtube', default_cpm: 10.00, purchase_cpm: 4.50, min_budget_per_store: 200, max_coverage: 60, color: '#ef4444', icon: 'Youtube', auto_budget_percent: 80 },
 
     // DOOH
     { type: 'DOOH-Mixed', label: 'Mixed format', family: 'DOOH', default_cpm: 22.00, purchase_cpm: 10.00, min_budget_per_store: 500, max_coverage: 50, color: '#f59e0b', icon: 'Monitor', auto_budget_percent: 5 },
 
     // Google
-    { type: 'Google-PMAX',      label: 'PMAX',       family: 'Google', default_cpm: 3.00, purchase_cpm: 1.60, min_budget_per_store: 200, max_coverage: 70, color: '#f59e0b', icon: 'Search', auto_budget_percent: 10 },
-    { type: 'Google-DemandGen', label: 'Demand Gen', family: 'Google', default_cpm: 3.50, purchase_cpm: 1.90, min_budget_per_store: 200, max_coverage: 70, color: '#fbbf24', icon: 'Search', auto_budget_percent: 10 },
+    { type: 'Google-PMAX',      label: 'PMAX',       family: 'Google', default_cpm: 3.00, purchase_cpm: 1.60, min_budget_per_store: 200, max_coverage: 70, color: '#f59e0b', icon: 'Search', auto_budget_percent: 90 },
+    { type: 'Google-DemandGen', label: 'Demand Gen', family: 'Google', default_cpm: 3.50, purchase_cpm: 1.90, min_budget_per_store: 200, max_coverage: 70, color: '#fbbf24', icon: 'Search', auto_budget_percent: 50 },
 
     // Audio
-    { type: 'Audio-Mixed', label: 'Mixed format', family: 'Audio', default_cpm: 20.00, purchase_cpm: 10.00, min_budget_per_store: 200, max_coverage: 40, color: '#06b6d4', icon: 'Music', auto_budget_percent: 5 },
+    { type: 'Audio-Mixed', label: 'Mixed format', family: 'Audio', default_cpm: 20.00, purchase_cpm: 10.00, min_budget_per_store: 200, max_coverage: 40, color: '#06b6d4', icon: 'Music', auto_budget_percent: 90 },
+
+    // Pinterest
+    { type: 'Pinterest-Pinterest', label: 'Pinterest', family: 'Pinterest', default_cpm: 5.00, purchase_cpm: 3.00, min_budget_per_store: 100, max_coverage: 20, color: '#ec4899', icon: 'Pin', auto_budget_percent: 50 },
+
+    // Snapchat
+    { type: 'Snapchat-Snapchat', label: 'Snapchat', family: 'Snapchat', default_cpm: 5.00, purchase_cpm: 3.00, min_budget_per_store: 100, max_coverage: 20, color: '#fbbf24', icon: 'Ghost', auto_budget_percent: 60 },
   ];
   const insertConfig = db.prepare(`INSERT OR IGNORE INTO lever_configs (type, label, family, default_cpm, purchase_cpm, min_budget_per_store, max_coverage, color, icon, auto_budget_percent) VALUES (@type, @label, @family, @default_cpm, @purchase_cpm, @min_budget_per_store, @max_coverage, @color, @icon, @auto_budget_percent)`);
   const backfillPurchaseCpm = db.prepare(`UPDATE lever_configs SET purchase_cpm = @purchase_cpm, label = COALESCE(label, @label), family = COALESCE(family, @family) WHERE type = @type AND (purchase_cpm = 0 OR purchase_cpm IS NULL)`);
@@ -204,6 +217,8 @@ export function initDB() {
     // Backfill purchase_cpm for rows inserted before this column existed.
     backfillPurchaseCpm.run(cfg);
   }
+  // Rename VOL → Youtube for existing databases
+  db.prepare(`UPDATE lever_configs SET label = 'Youtube seul', family = 'Youtube' WHERE type = 'VOL-Mixed' AND family = 'VOL'`).run();
 
   // Feu Vert — 331 magasins (populations estimées par aire urbaine)
   const seedStores = [

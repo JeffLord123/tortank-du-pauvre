@@ -7,6 +7,8 @@ interface Props {
   max?: number;
   step?: number;
   className?: string;
+  disabled?: boolean;
+  title?: string;
 }
 
 /** Returns null when the field is empty or not yet a complete number (no forced 0 while editing). */
@@ -94,7 +96,7 @@ export function PlainNumericInput({
   );
 }
 
-export default function NumInput({ value, onChange, min, max, className }: Props) {
+export default function NumInput({ value, onChange, min, max, className, disabled, title }: Props) {
   const [display, setDisplay] = useState(
     new Intl.NumberFormat('fr-FR', { maximumFractionDigits: 0 }).format(Math.round(value))
   );
@@ -107,11 +109,13 @@ export default function NumInput({ value, onChange, min, max, className }: Props
   }, [value, focused]);
 
   const handleFocus = () => {
+    if (disabled) return;
     setFocused(true);
     setDisplay(String(Math.round(value)));
   };
 
   const handleChange = (e: React.ChangeEvent<HTMLInputElement>) => {
+    if (disabled) return;
     setDisplay(e.target.value);
     const parsed = parseFormattedNumber(e.target.value);
     if (parsed === null) return;
@@ -120,6 +124,7 @@ export default function NumInput({ value, onChange, min, max, className }: Props
   };
 
   const handleBlur = () => {
+    if (disabled) return;
     setFocused(false);
     const parsed = parseFormattedNumber(display);
     const raw = parsed === null ? 0 : parsed;
@@ -133,6 +138,8 @@ export default function NumInput({ value, onChange, min, max, className }: Props
       type="text"
       inputMode="numeric"
       value={display}
+      disabled={disabled}
+      title={title}
       onFocus={handleFocus}
       onChange={handleChange}
       onBlur={handleBlur}

@@ -52,7 +52,9 @@ router.post('/upload-excel', upload.single('file'), (req, res) => {
 
   const mode = req.query.mode === 'append' ? 'append' : 'replace';
 
-  const insertStore = db.prepare('INSERT OR REPLACE INTO stores (id, name, population) VALUES (?, ?, ?)');
+  const insertStore = db.prepare(
+    'INSERT OR REPLACE INTO stores (id, name, population, budget_weight_percent) VALUES (?, ?, ?, NULL)',
+  );
   const insertUpload = db.prepare('INSERT INTO excel_uploads (id, filename, row_count, replace_all) VALUES (?, ?, ?, ?)');
 
   // Only touch the DB once all rows are validated
@@ -63,29 +65,56 @@ router.post('/upload-excel', upload.single('file'), (req, res) => {
   });
 
   run();
-  res.json({ count: newStores.length, stores: newStores.map(s => ({ ...s, budget: 0 })) });
+  res.json({ count: newStores.length, stores: newStores });
 });
 
 router.get('/', (_req, res) => {
   const rows = db.prepare('SELECT * FROM stores ORDER BY rowid').all();
-  res.json(rows.map(r => ({ id: r.id, name: r.name, population: r.population })));
+  res.json(
+    rows.map(r => ({
+      id: r.id,
+      name: r.name,
+      population: r.population,
+      budgetWeightPercent: r.budget_weight_percent ?? undefined,
+    })),
+  );
 });
 
 router.post('/', (req, res) => {
-  const { id, name, population } = req.body;
+  const { id, name, population, budgetWeightPercent } = req.body;
   const storeId = id || randomUUID();
-  db.prepare('INSERT INTO stores (id, name, population) VALUES (?, ?, ?)').run(storeId, name, population ?? 140000);
-  res.status(201).json({ id: storeId, name, population: population ?? 140000 });
+  const pop = population ?? 140000;
+  const w = budgetWeightPercent != null && !Number.isNaN(Number(budgetWeightPercent)) ? Number(budgetWeightPercent) : null;
+  db.prepare('INSERT INTO stores (id, name, population, budget_weight_percent) VALUES (?, ?, ?, ?)').run(
+    storeId,
+    name,
+    pop,
+    w,
+  );
+  res.status(201).json({ id: storeId, name, population: pop, budgetWeightPercent: w ?? undefined });
 });
 
 router.put('/:id', (req, res) => {
   const { id } = req.params;
-  const { name, population } = req.body;
-  db.prepare('UPDATE stores SET name = COALESCE(?, name), population = COALESCE(?, population) WHERE id = ?')
-    .run(name, population, id);
+  const { name, population, budgetWeightPercent } = req.body;
+  db.prepare(`UPDATE stores SET
+    name = COALESCE(?, name),
+    population = COALESCE(?, population),
+    budget_weight_percent = COALESCE(?, budget_weight_percent)
+    WHERE id = ?`).run(
+    name,
+    population,
+    budgetWeightPercent != null && !Number.isNaN(Number(budgetWeightPercent)) ? Number(budgetWeightPercent) : null,
+    id,
+  );
   const row = db.prepare('SELECT * FROM stores WHERE id = ?').get(id);
   if (!row) return res.status(404).json({ error: 'Store not found' });
-  res.json({ id: row.id, name: row.name, population: row.population });
+  res.json({
+    id: row.id,
+    name: row.name,
+    population: row.population,
+    budgetWeightPercent: row.budget_weight_percent ?? undefined,
+  });
 });
 
 router.delete('/:id', (req, res) => {

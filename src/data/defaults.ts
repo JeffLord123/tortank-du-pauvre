@@ -37,8 +37,11 @@ export const LEVER_CONFIGS: Record<string, LeverConfig> = {
   'CTV-Mixed':            { type: 'CTV-Mixed',            label: 'Mixed format',               family: 'CTV', defaultCpm: 16.00, purchaseCpm: 9.33,  minBudgetPerStore: 300, maxCoverage: 55, color: '#a855f7', icon: 'Tv', autoBudgetPercent: 10 },
   'CTV-BroadcasterOnly':  { type: 'CTV-BroadcasterOnly',  label: 'Mixed Broadcaster only',     family: 'CTV', defaultCpm: 20.00, purchaseCpm: 12.00, minBudgetPerStore: 300, maxCoverage: 55, color: '#c084fc', icon: 'Tv', autoBudgetPercent: 5  },
 
-  // VOL (hors CTV)
-  'VOL-Mixed': { type: 'VOL-Mixed', label: 'Mixed format', family: 'VOL', defaultCpm: 10.00, purchaseCpm: 4.50, minBudgetPerStore: 200, maxCoverage: 60, color: '#ef4444', icon: 'Youtube', autoBudgetPercent: 10, logoUrl: '/levers/youtube.svg' },
+  // Display Desktop
+  'DisplayDesktop-Mixed': { type: 'DisplayDesktop-Mixed', label: 'Mixed format', family: 'Display Desktop', defaultCpm: 5.50, purchaseCpm: 2.50, minBudgetPerStore: 100, maxCoverage: 55, color: '#00b4d8', icon: 'Laptop', autoBudgetPercent: 10 },
+
+  // Youtube (ex-VOL)
+  'VOL-Mixed': { type: 'VOL-Mixed', label: 'Youtube seul', family: 'Youtube', defaultCpm: 10.00, purchaseCpm: 4.50, minBudgetPerStore: 200, maxCoverage: 60, color: '#ef4444', icon: 'Youtube', autoBudgetPercent: 10, logoUrl: '/levers/youtube.svg' },
 
   // DOOH
   'DOOH-Mixed': { type: 'DOOH-Mixed', label: 'Mixed format', family: 'DOOH', defaultCpm: 22.00, purchaseCpm: 10.00, minBudgetPerStore: 500, maxCoverage: 50, color: '#f59e0b', icon: 'Monitor', autoBudgetPercent: 5 },
@@ -49,21 +52,27 @@ export const LEVER_CONFIGS: Record<string, LeverConfig> = {
 
   // Audio
   'Audio-Mixed': { type: 'Audio-Mixed', label: 'Mixed format', family: 'Audio', defaultCpm: 20.00, purchaseCpm: 10.00, minBudgetPerStore: 200, maxCoverage: 40, color: '#06b6d4', icon: 'Music', autoBudgetPercent: 5 },
+
+  // Pinterest
+  'Pinterest-Pinterest': { type: 'Pinterest-Pinterest', label: 'Pinterest', family: 'Pinterest', defaultCpm: 4.00, purchaseCpm: 1.80, minBudgetPerStore: 80, maxCoverage: 35, color: '#ec4899', icon: 'Pin', autoBudgetPercent: 5, logoUrl: '/levers/pinterest.svg' },
+
+  // Snapchat
+  'Snapchat-Snapchat': { type: 'Snapchat-Snapchat', label: 'Snapchat', family: 'Snapchat', defaultCpm: 5.50, purchaseCpm: 2.50, minBudgetPerStore: 100, maxCoverage: 45, color: '#fbbf24', icon: 'Ghost', autoBudgetPercent: 5, logoUrl: '/levers/snap.svg' },
 };
 
 export const LEVER_TYPES = Object.keys(LEVER_CONFIGS) as (keyof typeof LEVER_CONFIGS)[];
 
 export const DEFAULT_STORES: Store[] = [
-  { id: 's1', name: 'Paris Rivoli', population: 250000 },
-  { id: 's2', name: 'Lyon Part-Dieu', population: 180000 },
-  { id: 's3', name: 'Marseille Prado', population: 160000 },
-  { id: 's4', name: 'Bordeaux Sainte-Catherine', population: 140000 },
-  { id: 's5', name: 'Lille Grand Place', population: 130000 },
-  { id: 's6', name: 'Toulouse Capitole', population: 120000 },
-  { id: 's7', name: 'Nice Masséna', population: 110000 },
-  { id: 's8', name: 'Nantes Commerce', population: 105000 },
-  { id: 's9', name: 'Strasbourg Kléber', population: 100000 },
-  { id: 's10', name: 'Rennes République', population: 95000 },
+  { id: 's1', name: 'Paris Rivoli', population: 250000, budgetWeightPercent: 100 },
+  { id: 's2', name: 'Lyon Part-Dieu', population: 180000, budgetWeightPercent: 100 },
+  { id: 's3', name: 'Marseille Prado', population: 160000, budgetWeightPercent: 100 },
+  { id: 's4', name: 'Bordeaux Sainte-Catherine', population: 140000, budgetWeightPercent: 100 },
+  { id: 's5', name: 'Lille Grand Place', population: 130000, budgetWeightPercent: 100 },
+  { id: 's6', name: 'Toulouse Capitole', population: 120000, budgetWeightPercent: 100 },
+  { id: 's7', name: 'Nice Masséna', population: 110000, budgetWeightPercent: 100 },
+  { id: 's8', name: 'Nantes Commerce', population: 105000, budgetWeightPercent: 100 },
+  { id: 's9', name: 'Strasbourg Kléber', population: 100000, budgetWeightPercent: 100 },
+  { id: 's10', name: 'Rennes République', population: 95000, budgetWeightPercent: 100 },
 ];
 
 export const DEFAULT_PRESETS: Preset[] = [

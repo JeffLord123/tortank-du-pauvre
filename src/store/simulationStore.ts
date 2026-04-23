@@ -1,5 +1,19 @@
 import { create } from 'zustand';
-import type { Simulation, Hypothesis, Lever, LeverType, ObjectiveMode, BudgetMode, Preset, PresetScope, Store, LeverConfig, GlobalParams, Prestation } from '../types';
+import type {
+  Simulation,
+  Hypothesis,
+  Lever,
+  LeverType,
+  ObjectiveMode,
+  BudgetMode,
+  Preset,
+  PresetScope,
+  Store,
+  StoreDistributionMode,
+  LeverConfig,
+  GlobalParams,
+  Prestation,
+} from '../types';
 import { LEVER_CONFIGS as INITIAL_LEVER_CONFIGS, DEFAULT_STORES as INITIAL_STORES, DEFAULT_PRESETS, STORE_POPULATIONS, getZoneMultiplier } from '../data/defaults';
 import { api } from '../services/api';
 import { useProfileStore } from './profileStore';
@@ -117,6 +131,97 @@ export function avgForDedupCoverage(targetDedup: number, maxes: number[]): numbe
     if (d < target) lo = mid; else hi = mid;
   }
   return (lo + hi) / 2;
+}
+
+/** Ventile un budget entier en parts entières (méthode des plus grands restes). */
+function largestRemainderToIntegers(raw: number[], targetSum: number): number[] {
+  const n = raw.length;
+  if (n === 0) return [];
+  const floors = raw.map(x => Math.floor(Math.max(0, x)));
+  let s = floors.reduce((a, b) => a + b, 0);
+  let rem = targetSum - s;
+  const order = raw.map((x, i) => ({ i, frac: x - Math.floor(Math.max(0, x)) })).sort((a, b) => b.frac - a.frac);
+  const out = [...floors];
+  const add = Math.max(0, rem);
+  for (let k = 0; k < add && k < n; k++) out[order[k].i]++;
+  s = out.reduce((a, b) => a + b, 0);
+  if (s !== targetSum && n > 0) out[n - 1] += targetSum - s;
+  return out;
+}
+
+/** Répartition « pure » du montant (sans plancher par magasin). */
+function allocateStoreBudgetsCore(totalBudget: number, stores: Store[], mode: StoreDistributionMode): number[] {
+  const n = stores.length;
+  if (n === 0) return [];
+  const tb = Math.max(0, Math.round(totalBudget));
+  if (tb === 0) return new Array(n).fill(0);
+
+  if (mode === 'egal') {
+    return largestRemainderToIntegers(new Array(n).fill(tb / n), tb);
+  }
+  if (mode === 'population') {
+    const pops = stores.map(s => Math.max(0, s.population || 0));
+    const sum = pops.reduce((a, b) => a + b, 0);
+    if (sum <= 0) {
+      return largestRemainderToIntegers(new Array(n).fill(tb / n), tb);
+    }
+    return largestRemainderToIntegers(
+      pops.map(p => (tb * p) / sum),
+      tb,
+    );
+  }
+  // pondere : part population × (poids/100) ; 100% = identique à « population » ; puis normalisation sur le total.
+  const pops = stores.map(s => Math.max(0, s.population || 0));
+  const sumPop = pops.reduce((a, b) => a + b, 0);
+  const popShare =
+    sumPop > 0
+      ? pops.map(p => p / sumPop)
+      : new Array(n).fill(1 / n);
+  const mults = stores.map(s => {
+    const w = s.budgetWeightPercent ?? 100;
+    return Math.max(0, w) / 100;
+  });
+  const raw = popShare.map((ps, i) => ps * mults[i]!);
+  const sumR = raw.reduce((a, b) => a + b, 0);
+  if (sumR <= 0) {
+    return largestRemainderToIntegers(new Array(n).fill(tb / n), tb);
+  }
+  return largestRemainderToIntegers(
+    raw.map(r => (tb * r) / sumR),
+    tb,
+  );
+}
+
+/**
+ * Budget par magasin pour le total d’hypothèse (somme = totalBudget).
+ * Si `minPerStore` > 0 : chaque magasin reçoit au moins ce montant (somme des min. par mag. des leviers),
+ * puis le reliquat est réparti selon le mode. Si le total ne suffit pas pour ces minimums, retombe sur
+ * la répartition sans plancher.
+ */
+export function allocateStoreBudgets(
+  totalBudget: number,
+  stores: Store[],
+  mode: StoreDistributionMode,
+  minPerStore = 0,
+): number[] {
+  const n = stores.length;
+  if (n === 0) return [];
+  const tb = Math.max(0, Math.round(totalBudget));
+  if (tb === 0) return new Array(n).fill(0);
+
+  const m = Math.max(0, Math.round(minPerStore));
+  if (m === 0) return allocateStoreBudgetsCore(tb, stores, mode);
+
+  if (m * n > tb) {
+    return allocateStoreBudgetsCore(tb, stores, mode);
+  }
+
+  if (m * n === tb) {
+    return new Array(n).fill(m);
+  }
+
+  const extra = allocateStoreBudgetsCore(tb - m * n, stores, mode);
+  return new Array(n).fill(m).map((base, i) => base + (extra[i] ?? 0));
 }
 
 // ── Warnings ─────────────────────────────────────────────────
@@ -261,7 +366,7 @@ interface SimulationState {
   // Admin - Stores
   addStore: (name: string) => void;
   removeStore: (id: string) => void;
-  updateStore: (id: string, updates: Partial<Pick<Store, 'name' | 'population'>>) => void;
+  updateStore: (id: string, updates: Partial<Pick<Store, 'name' | 'population' | 'budgetWeightPercent'>>) => void;
   importStoresFromExcel: (file: File, mode: 'replace' | 'append') => Promise<void>;
 
   // Admin - Global params
@@ -281,6 +386,17 @@ export interface HypothesisSummary {
   leverCount: number;
   minStore: { name: string; budget: number };
   maxStore: { name: string; budget: number };
+  /** Budget simulé par magasin (même formule que min/max), pour le détail / tri. */
+  storeBudgets: {
+    id: string;
+    name: string;
+    population: number;
+    /** Poids % (Admin → Magasins), utilisé en répartition « Pondéré ». */
+    weightPercent: number;
+    budget: number;
+    coverage: number;
+    repetition: number;
+  }[];
   generalCoverage: number;
   coverageDetail: { name: string; coverage: number }[];
   avgRepetition: number;
@@ -401,7 +517,7 @@ export const useSimulationStore = create<SimulationState>((set, get) => ({
   showAdmin: false,
   leverConfigs: { ...INITIAL_LEVER_CONFIGS },
   stores: initialStores,
-  globalParams: { defaultPopulation: 140000, maxBudgetPerStore: 50000, defaultTotalBudget: 500000, maxBudgetSlider: 500000, maxRepetitionSlider: 10 },
+  globalParams: { defaultPopulation: 140000, maxBudgetPerStore: 50000, typicalBudgetPerStore: 1500, maxBudgetSliderPerStore: 3000, maxRepetitionSlider: 10 },
   apiReady: false,
   appliedPresets: {},
 
@@ -439,8 +555,8 @@ export const useSimulationStore = create<SimulationState>((set, get) => ({
       const safeGlobalParams: GlobalParams = {
         defaultPopulation: globalParams.defaultPopulation || 140000,
         maxBudgetPerStore: globalParams.maxBudgetPerStore || 50000,
-        defaultTotalBudget: globalParams.defaultTotalBudget || 500000,
-        maxBudgetSlider:   globalParams.maxBudgetSlider   || 500000,
+        typicalBudgetPerStore: globalParams.typicalBudgetPerStore || 1500,
+        maxBudgetSliderPerStore: globalParams.maxBudgetSliderPerStore || 3000,
         maxRepetitionSlider: globalParams.maxRepetitionSlider || 10,
       };
 
@@ -463,6 +579,7 @@ export const useSimulationStore = create<SimulationState>((set, get) => ({
             const normalized: Hypothesis = {
               ...h,
               zoneId: h.zoneId ?? 'zone1',
+              storeDistributionMode: h.storeDistributionMode ?? 'egal',
               budgetsByMode: (h.budgetsByMode && Object.keys(h.budgetsByMode).length > 0)
                 ? h.budgetsByMode
                 : { [h.budgetMode]: h.totalBudget },
@@ -497,17 +614,19 @@ export const useSimulationStore = create<SimulationState>((set, get) => ({
       return;
     }
     const gp = get().globalParams;
+    const defaultTotal = gp.typicalBudgetPerStore * (get().stores.length || 1);
     const h: Hypothesis = {
       id: uid(),
       name: 'Hypothèse 1',
       maxBudgetPerStore: gp.maxBudgetPerStore,
       objectiveMode: 'budget',
       budgetMode: 'automatique',
-      totalBudget: gp.defaultTotalBudget,
-      budgetsByMode: { automatique: gp.defaultTotalBudget },
+      totalBudget: defaultTotal,
+      budgetsByMode: { automatique: defaultTotal },
       levers: [],
       collapsed: false,
       zoneId: 'zone1',
+      storeDistributionMode: 'egal',
     };
     const sim: Simulation = { id: uid(), name, startDate, endDate, cpmId, hypotheses: [h] };
     set({ simulation: sim, activeHypothesisId: h.id });
@@ -541,6 +660,7 @@ export const useSimulationStore = create<SimulationState>((set, get) => ({
         collapsed: false,
         zoneId: 'zone1',
         retrocommissionPercent: 0,
+        storeDistributionMode: 'egal',
       };
       const sim = { ...state.simulation, hypotheses: [...state.simulation.hypotheses, h] };
       api.postHypothesis(state.simulation.id, { ...h, sort_order: sim.hypotheses.length - 1 }).catch(console.error);
@@ -632,6 +752,7 @@ export const useSimulationStore = create<SimulationState>((set, get) => ({
             totalBudget: recalced.totalBudget,
             retrocommissionPercent: recalced.retrocommissionPercent ?? 0,
             collapsed: recalced.collapsed,
+            storeDistributionMode: recalced.storeDistributionMode ?? 'egal',
           }).catch(console.error);
           recalced.levers.forEach(l => {
             api.putLever(id, l.id, l).catch(console.error);
@@ -1217,9 +1338,9 @@ export const useSimulationStore = create<SimulationState>((set, get) => ({
     const id = uid();
     const population = get().globalParams.defaultPopulation;
     set(state => ({
-      stores: [...state.stores, { id, name, budget: 0, population }],
+      stores: [...state.stores, { id, name, population, budgetWeightPercent: 100 }],
     }));
-    api.postStore({ id, name, population }).catch(console.error);
+    api.postStore({ id, name, population, budgetWeightPercent: 100 }).catch(console.error);
   },
 
   removeStore: (id) => {
@@ -1302,14 +1423,7 @@ export const useSimulationStore = create<SimulationState>((set, get) => ({
       ? h.levers.reduce((s, l) => s + l.budget, 0)
       : h.totalBudget;
 
-    const storeBudgets = state.stores.map((store, i) => {
-      const factor = 1 + (i % 3 === 0 ? 0.15 : i % 3 === 1 ? -0.1 : 0.05);
-      return { name: store.name, budget: Math.round((totalBudget / storeCount) * factor) };
-    });
-
-    const sortedStores = [...storeBudgets].sort((a, b) => a.budget - b.budget);
-
-    // Couverture dédupliquée : 1 - ∏(1 - couv_i/100)
+    // Couverture dédupliquée : 1 - ∏(1 - couv_i/100) — alignée sur le récap, répétition moyenne des leviers
     const coverageDetail = h.levers.map(l => ({ name: l.type, coverage: l.coverage }));
     const deduplicatedCoverage = h.levers.length > 0
       ? Math.round((1 - h.levers.reduce((prod, l) => prod * (1 - l.coverage / 100), 1)) * 1000) / 10
@@ -1318,6 +1432,22 @@ export const useSimulationStore = create<SimulationState>((set, get) => ({
     const avgRepetition = h.levers.length > 0
       ? Math.round((h.levers.reduce((s, l) => s + l.repetition, 0) / h.levers.length) * 10) / 10
       : 0;
+
+    const distMode: StoreDistributionMode = h.storeDistributionMode ?? 'egal';
+    const minPerStoreFromLevers =
+      h.levers.length > 0 ? h.levers.reduce((s, l) => s + l.minBudgetPerStore, 0) : 0;
+    const parts = allocateStoreBudgets(totalBudget, state.stores, distMode, Math.round(minPerStoreFromLevers));
+    const storeBudgets = state.stores.map((store, i) => ({
+      id: store.id,
+      name: store.name,
+      population: store.population,
+      weightPercent: store.budgetWeightPercent ?? 100,
+      budget: parts[i] ?? 0,
+      coverage: deduplicatedCoverage,
+      repetition: avgRepetition,
+    }));
+
+    const sortedStores = [...storeBudgets].map(({ name, budget }) => ({ name, budget })).sort((a, b) => a.budget - b.budget);
 
     const leverBreakdown = h.levers.map(l => {
       const cfg = state.leverConfigs[l.type];
@@ -1353,6 +1483,7 @@ export const useSimulationStore = create<SimulationState>((set, get) => ({
       leverCount: h.levers.length,
       minStore: sortedStores[0] || { name: '-', budget: 0 },
       maxStore: sortedStores[sortedStores.length - 1] || { name: '-', budget: 0 },
+      storeBudgets,
       generalCoverage: deduplicatedCoverage,
       coverageDetail,
       avgRepetition,
