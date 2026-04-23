@@ -12,13 +12,6 @@ dist
 dist-ssr
 *.local
 
-# Server
-server/data.db
-server/data.db-shm
-server/data.db-wal
-server/simulation.db
-server/uploads/
-
 # macOS artifacts
 __MACOSX
 
