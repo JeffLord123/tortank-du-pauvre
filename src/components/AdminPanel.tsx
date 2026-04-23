@@ -150,7 +150,7 @@ export default function AdminPanel() {
     [stores],
   );
 
-  type StoreSortKey = 'name' | 'population' | 'weight';
+  type StoreSortKey = 'name' | 'population' | 'pop10min' | 'pop20min' | 'pop30min' | 'popCustom' | 'weight';
   const [storeSort, setStoreSort] = useState<{ key: StoreSortKey; dir: 'asc' | 'desc' }>({ key: 'name', dir: 'asc' });
   const sortedStores = useMemo(() => {
     const w = (s: (typeof stores)[number]) => s.budgetWeightPercent ?? defaultStoreWeight;
@@ -159,8 +159,14 @@ export default function AdminPanel() {
       let cmp = 0;
       if (storeSort.key === 'name') {
         cmp = a.name.localeCompare(b.name, 'fr', { sensitivity: 'base' });
-      } else if (storeSort.key === 'population') {
-        cmp = a.population - b.population;
+      } else if (storeSort.key === 'population' || storeSort.key === 'pop10min') {
+        cmp = (a.pop10min ?? a.population ?? 0) - (b.pop10min ?? b.population ?? 0);
+      } else if (storeSort.key === 'pop20min') {
+        cmp = (a.pop20min ?? 0) - (b.pop20min ?? 0);
+      } else if (storeSort.key === 'pop30min') {
+        cmp = (a.pop30min ?? 0) - (b.pop30min ?? 0);
+      } else if (storeSort.key === 'popCustom') {
+        cmp = (a.popCustom ?? 0) - (b.popCustom ?? 0);
       } else {
         cmp = w(a) - w(b);
       }
@@ -591,7 +597,7 @@ export default function AdminPanel() {
               )}
 
               <div className="overflow-x-auto rounded-xl border border-navy-600/20 bg-navy-900/20">
-                <table className="w-full min-w-[520px] text-[11px]">
+                <table className="w-full min-w-[820px] text-[11px]">
                   <thead>
                     <tr className="text-fg/60 text-left border-b border-fg/12">
                       <th className="py-2.5 pl-3 pr-2 font-medium align-bottom">
@@ -608,21 +614,28 @@ export default function AdminPanel() {
                           )}
                         </button>
                       </th>
-                      <th className="py-2.5 px-2 font-medium whitespace-nowrap align-bottom w-36">
-                        <button
-                          type="button"
-                          onClick={() => toggleStoreSort('population')}
-                          className="inline-flex items-center gap-1 rounded-md hover:text-fg/88 focus:outline-none focus-visible:ring-2 focus-visible:ring-teal-400/40 -my-0.5 -ml-0.5 px-0.5"
-                        >
-                          Pop.
-                          {storeSort.key === 'population' ? (
-                            storeSort.dir === 'asc' ? <ChevronUp className="w-3.5 h-3.5 shrink-0" /> : <ChevronDown className="w-3.5 h-3.5 shrink-0" />
-                          ) : (
-                            <ArrowUpDown className="w-3.5 h-3.5 shrink-0 opacity-40" />
-                          )}
-                        </button>
-                      </th>
-                      <th className="py-2.5 px-2 font-medium whitespace-nowrap align-bottom w-36" title="Poids pour le mode de répartition pondérée (hypothèse)">
+                      {([
+                        { key: 'pop10min', label: 'Pop. 10\'', field: 'pop10min' },
+                        { key: 'pop20min', label: 'Pop. 20\'', field: 'pop20min' },
+                        { key: 'pop30min', label: 'Pop. 30\'', field: 'pop30min' },
+                        { key: 'popCustom', label: 'Zone custom', field: 'popCustom' },
+                      ] as const).map(col => (
+                        <th key={col.key} className="py-2.5 px-2 font-medium whitespace-nowrap align-bottom w-28">
+                          <button
+                            type="button"
+                            onClick={() => toggleStoreSort(col.key)}
+                            className="inline-flex items-center gap-1 rounded-md hover:text-fg/88 focus:outline-none focus-visible:ring-2 focus-visible:ring-teal-400/40 -my-0.5 -ml-0.5 px-0.5"
+                          >
+                            {col.label}
+                            {storeSort.key === col.key ? (
+                              storeSort.dir === 'asc' ? <ChevronUp className="w-3.5 h-3.5 shrink-0" /> : <ChevronDown className="w-3.5 h-3.5 shrink-0" />
+                            ) : (
+                              <ArrowUpDown className="w-3.5 h-3.5 shrink-0 opacity-40" />
+                            )}
+                          </button>
+                        </th>
+                      ))}
+                      <th className="py-2.5 px-2 font-medium whitespace-nowrap align-bottom w-28" title="Poids pour le mode de répartition pondérée (hypothèse)">
                         <button
                           type="button"
                           onClick={() => toggleStoreSort('weight')}
@@ -653,15 +666,17 @@ export default function AdminPanel() {
                             />
                           </div>
                         </td>
-                        <td className="py-2.5 px-2 align-middle">
-                          <PlainNumericInput
-                            value={store.population}
-                            onChange={v => updateStore(store.id, { population: v })}
-                            min={0}
-                            step={1}
-                            className="w-full max-w-[7rem] bg-navy-800/60 border border-navy-600/30 rounded-md px-2 py-1 text-[11px] text-fg focus:outline-none focus:border-teal-400/40"
-                          />
-                        </td>
+                        {(['pop10min', 'pop20min', 'pop30min', 'popCustom'] as const).map(field => (
+                          <td key={field} className="py-2.5 px-2 align-middle">
+                            <PlainNumericInput
+                              value={store[field] ?? 0}
+                              onChange={v => updateStore(store.id, { [field]: v, ...(field === 'pop10min' ? { population: v } : {}) })}
+                              min={0}
+                              step={1}
+                              className="w-full max-w-[6rem] bg-navy-800/60 border border-navy-600/30 rounded-md px-2 py-1 text-[11px] text-fg focus:outline-none focus:border-teal-400/40"
+                            />
+                          </td>
+                        ))}
                         <td className="py-2.5 px-2 align-middle">
                           <div className="flex items-center gap-1">
                             <PlainNumericInput

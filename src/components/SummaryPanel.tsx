@@ -494,7 +494,6 @@ export default function SummaryPanel() {
 
       {/* Récapitulatif marge */}
       <MargeRecap
-        totalBudget={summary.totalBudget}
         realBudget={leversBudgetUsed}
         grandTotal={grandTotal}
         prestationsBilled={prestationsBilled}
@@ -642,7 +641,6 @@ export default function SummaryPanel() {
 }
 
 function MargeRecap({
-  totalBudget,
   realBudget,
   grandTotal,
   prestationsBilled,
@@ -653,7 +651,6 @@ function MargeRecap({
   marginAmount,
   marginPercent,
 }: {
-  totalBudget: number;
   realBudget: number;
   grandTotal: number;
   prestationsBilled: number;

@@ -3,7 +3,7 @@ export type LeverType = string;
 export type ObjectiveMode = 'budget' | 'couverture';
 export type BudgetMode = 'automatique' | 'levier' | 'pctTotal' | 'libre' | 'v3-levier';
 
-export type ZoneId = 'zone1' | 'zone2' | 'zone3';
+export type ZoneId = 'zone1' | 'zone2' | 'zone3' | 'zone4';
 
 /** Comment le budget total d’hypothèse est ventilé entre les points de vente (récap / tableaux). */
 export type StoreDistributionMode = 'egal' | 'population' | 'pondere';
@@ -87,7 +87,16 @@ export interface Preset {
 export interface Store {
   id: string;
   name: string;
+  /** Population zone 1 (< 10 min). Aussi utilisé comme valeur par défaut pour la répartition par population. */
   population: number;
+  /** Population zone 1 : < 10 min en voiture. */
+  pop10min: number;
+  /** Population zone 2 : < 20 min en voiture. */
+  pop20min: number;
+  /** Population zone 3 : < 30 min en voiture. */
+  pop30min: number;
+  /** Population zone 4 : Zone custom (ex. zone CRM). */
+  popCustom: number;
   /** Poids en % pour le mode « pondéré » (Admin → magasins). La somme peut différer de 100 : normalisation à l’application. */
   budgetWeightPercent?: number;
 }

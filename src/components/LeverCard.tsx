@@ -2,7 +2,7 @@ import { useState, useRef } from 'react';
 import { ChevronDown, Trash2, CalendarDays, Lock } from 'lucide-react';
 import { useSimulationStore } from '../store/simulationStore';
 import { useVersionStore } from '../store/versionStore';
-import { LEVER_CONFIGS, getZoneMultiplier } from '../data/defaults';
+import { LEVER_CONFIGS, getZoneAvgPop } from '../data/defaults';
 import type { Lever, Hypothesis } from '../types';
 import { formatNum, formatImpressions } from '../utils/formatNum';
 import NumInput, { PlainNumericInput } from './NumInput';
@@ -34,7 +34,7 @@ export default function LeverCard({ lever, hypothesis, index }: Props) {
   const isDraggingBudget = useRef(false);
 
   const sc = stores.length || 1;
-  const avgPop = (globalParams.defaultPopulation || 140000) * getZoneMultiplier(hypothesis.zoneId);
+  const avgPop = getZoneAvgPop(stores, hypothesis.zoneId);
   const sliderMax = (globalParams.maxBudgetSliderPerStore || 3000) * sc;
   // Coverage at which repetition reaches maxRepetitionSlider: cov = impressions / (maxRep * sc * avgPop) * 100
   const maxRepCoverage = lever.impressions > 0

@@ -3,7 +3,7 @@ import { Plus, Copy, Trash2, Zap, Target, DollarSign, Percent, Sliders, Unlock, 
 import { useSimulationStore, computeDedupCoverage, distributeCoverageWaterfill } from '../store/simulationStore';
 import { useProfileStore, getActiveProfile } from '../store/profileStore';
 import { useVersionStore } from '../store/versionStore';
-import { LEVER_TYPES, LEVER_CONFIGS, ZONES, getZoneMultiplier } from '../data/defaults';
+import { LEVER_TYPES, LEVER_CONFIGS, ZONES, getZoneAvgPop } from '../data/defaults';
 import LeverCard from './LeverCard';
 import LeverCardV3 from './LeverCardV3';
 import LeverLogoBadge from './LeverLogoBadge';
@@ -18,10 +18,11 @@ import SliderWithTooltip from './SliderWithTooltip';
 const DEFAULT_BUDGET_LOCKED = true;
 
 const BUDGET_MODE_LABELS: Record<BudgetMode, { label: string; icon: React.ElementType; desc: string }> = {
-  automatique: { label: 'Automatique', icon: Zap, desc: 'Budget réparti selon la grille' },
-  levier:      { label: 'Par levier', icon: Sliders, desc: 'Budget défini par levier' },
-  pctTotal:    { label: '% du total', icon: Percent, desc: 'Répartition en % du budget' },
-  libre:       { label: 'Libre', icon: Unlock, desc: 'Contrôle total sur chaque paramètre' },
+  automatique:  { label: 'Automatique', icon: Zap, desc: 'Budget réparti selon la grille' },
+  levier:       { label: 'Par levier', icon: Sliders, desc: 'Budget défini par levier' },
+  pctTotal:     { label: '% du total', icon: Percent, desc: 'Répartition en % du budget' },
+  libre:        { label: 'Libre', icon: Unlock, desc: 'Contrôle total sur chaque paramètre' },
+  'v3-levier':  { label: 'V3 levier', icon: Sliders, desc: 'Budget par levier (V3)' },
 };
 
 const STORE_DISTRIBUTION_MODES: {
@@ -131,7 +132,6 @@ function ZoneDropdown({
 
 function HypothesisCard({ hypothesis, isActive }: HypothesisCardProps) {
   const {
-    simulation,
     setActiveHypothesis,
     updateHypothesis,
     duplicateHypothesis,
@@ -146,7 +146,6 @@ function HypothesisCard({ hypothesis, isActive }: HypothesisCardProps) {
     presets,
     leverConfigs,
     stores,
-    globalParams,
   } = useSimulationStore();
   const profiles = useProfileStore(s => s.profiles);
   const activeProfileId = useProfileStore(s => s.activeProfileId);
@@ -164,8 +163,6 @@ function HypothesisCard({ hypothesis, isActive }: HypothesisCardProps) {
         (p.scope === 'user' && p.ownerProfileId === activeProfile.id),
     );
   }, [presets, activeProfile]);
-
-  const canRemoveHypothesis = (simulation?.hypotheses.length ?? 0) > 1;
 
   const [showAddLever, setShowAddLever] = useState(false);
   const [showPresets, setShowPresets] = useState(false);
@@ -191,7 +188,7 @@ function HypothesisCard({ hypothesis, isActive }: HypothesisCardProps) {
       // coverage fixed, rep adjusts
       const maxCov = lever.maxCoverage;
       const sc = stores.length || 1;
-      const avgPop = (globalParams.defaultPopulation || 140000) * getZoneMultiplier(hypothesis.zoneId);
+      const avgPop = getZoneAvgPop(stores, hypothesis.zoneId);
       const covAtRep1 = lever.cpm > 0
         ? Math.min(maxCov, Math.round(((newBudget / lever.cpm * 1000) / (1 * sc) / avgPop) * 1000) / 10)
         : 0;
@@ -212,7 +209,6 @@ function HypothesisCard({ hypothesis, isActive }: HypothesisCardProps) {
   }
 
   // V2 objectif couverture : slider de couverture cible au niveau hypothèse
-  const isV1Like = version === 'v1' || version === 'v3';
   const isV2Coverage = version === 'v2' && hypothesis.objectiveMode === 'couverture';
   // Couverture dédupliquée actuelle : 1 - ∏(1 - cov_i/100). C'est la même
   // valeur que celle du recap hypothèse.
@@ -560,7 +556,7 @@ function HypothesisCard({ hypothesis, isActive }: HypothesisCardProps) {
                     <p className="text-[10px] text-fg/45 mt-1">
                       Population moyenne&nbsp;:{' '}
                       {formatNum(
-                        Math.round((globalParams.defaultPopulation || 140000) * getZoneMultiplier(hypothesis.zoneId)),
+                        getZoneAvgPop(stores, hypothesis.zoneId),
                       )}{' '}
                       hab./magasin
                     </p>

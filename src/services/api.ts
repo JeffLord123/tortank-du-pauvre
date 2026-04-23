@@ -28,9 +28,9 @@ export const api = {
 
   // ── Stores ───────────────────────────────────────────────────
   getStores: () => req<Store[]>('GET', '/stores'),
-  postStore: (s: { id: string; name: string; population: number; budgetWeightPercent?: number }) =>
+  postStore: (s: { id: string; name: string; population: number; pop10min?: number; pop20min?: number; pop30min?: number; popCustom?: number; budgetWeightPercent?: number }) =>
     req<Store>('POST', '/stores', s),
-  putStore: (id: string, updates: Partial<Pick<Store, 'name' | 'population' | 'budgetWeightPercent'>>) =>
+  putStore: (id: string, updates: Partial<Pick<Store, 'name' | 'population' | 'pop10min' | 'pop20min' | 'pop30min' | 'popCustom' | 'budgetWeightPercent'>>) =>
     req<Store>('PUT', `/stores/${id}`, updates),
   deleteStore: (id: string) => req<void>('DELETE', `/stores/${id}`),
 

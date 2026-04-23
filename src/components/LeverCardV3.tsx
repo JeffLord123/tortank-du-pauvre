@@ -1,7 +1,7 @@
 import { useState, useRef } from 'react';
 import { ChevronDown, Trash2, CalendarDays, Lock, LockOpen } from 'lucide-react';
 import { useSimulationStore } from '../store/simulationStore';
-import { LEVER_CONFIGS, getZoneMultiplier } from '../data/defaults';
+import { LEVER_CONFIGS, getZoneAvgPop } from '../data/defaults';
 import type { Lever, Hypothesis } from '../types';
 import { formatNum, formatImpressions } from '../utils/formatNum';
 import NumInput, { PlainNumericInput } from './NumInput';
@@ -22,7 +22,7 @@ export default function LeverCardV3({ lever, hypothesis, index, budgetLocked, on
   const config = leverConfigs[lever.type] ?? LEVER_CONFIGS[lever.type];
 
   const sc = stores.length || 1;
-  const avgPop = (globalParams.defaultPopulation || 140000) * getZoneMultiplier(hypothesis.zoneId);
+  const avgPop = getZoneAvgPop(stores, hypothesis.zoneId);
   const sliderMax = (globalParams.maxBudgetSliderPerStore || 3000) * sc;
 
   // Budget display unit: € or % (only when budget is locked)
@@ -62,12 +62,6 @@ export default function LeverCardV3({ lever, hypothesis, index, budgetLocked, on
     return Math.max(0.1, Math.round((impressions / (totalReach * sc)) * 10) / 10);
   }
 
-  function calcBudgetFromCovRep(cov: number, rep: number): number {
-    const totalReach = (cov / 100) * avgPop;
-    const impressions = totalReach * rep * sc;
-    return Math.round((impressions * lever.cpm) / 1000);
-  }
-
   // ── Budget change (unlocked): couv up to maxCoverage then répet, and vice-versa ──
   function handleBudgetChange(budget: number) {
     const maxCov = lever.maxCoverage;
@@ -104,11 +98,6 @@ export default function LeverCardV3({ lever, hypothesis, index, budgetLocked, on
     updateLever(hypothesis.id, lever.id, { repetition, coverage: newCov, impressions });
   }
 
-  // ── Budget % change: convert to € then apply ──
-  function handleBudgetPctChange(pct: number) {
-    const newBudget = Math.round((pct / 100) * totalHypBudget);
-    handleBudgetChange(newBudget);
-  }
 
   const maxRepCoverage = lever.impressions > 0
     ? Math.min(100, (lever.impressions / (globalParams.maxRepetitionSlider * sc * avgPop)) * 100)

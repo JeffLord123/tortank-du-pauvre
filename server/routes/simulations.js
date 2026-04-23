@@ -39,6 +39,7 @@ function getFullSimulation(id) {
       totalBudget: h.total_budget,
       retrocommissionPercent: h.retrocommission_percent ?? 0,
       storeDistributionMode: h.store_distribution_mode ?? 'egal',
+      zoneId: h.zone_id ?? 'zone1',
       collapsed: h.collapsed === 1,
       levers: allLevers
         .filter(l => l.hypothesis_id === h.id)
@@ -152,8 +153,8 @@ router.put('/:id/replace', (req, res) => {
     // Cascade delete hypotheses (which cascades levers)
     db.prepare('DELETE FROM hypotheses WHERE simulation_id = ?').run(simId);
 
-    const insertHyp = db.prepare(`INSERT INTO hypotheses (id, simulation_id, name, max_budget_per_store, objective_mode, budget_mode, total_budget, retrocommission_percent, collapsed, sort_order, store_distribution_mode)
-      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`);
+    const insertHyp = db.prepare(`INSERT INTO hypotheses (id, simulation_id, name, max_budget_per_store, objective_mode, budget_mode, total_budget, retrocommission_percent, collapsed, sort_order, store_distribution_mode, zone_id)
+      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`);
     const insertLever = db.prepare(`INSERT INTO levers (id, hypothesis_id, type, cpm, purchase_cpm, min_budget_per_store, budget, budget_percent, repetition, coverage, max_coverage, impressions, start_date, end_date, collapsed, sort_order)
       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`);
     for (let i = 0; i < hypotheses.length; i++) {
@@ -170,6 +171,7 @@ router.put('/:id/replace', (req, res) => {
         h.collapsed ? 1 : 0,
         i,
         h.storeDistributionMode ?? 'egal',
+        h.zoneId ?? 'zone1',
       );
       const levers = Array.isArray(h.levers) ? h.levers : [];
       for (let j = 0; j < levers.length; j++) {
@@ -228,9 +230,10 @@ router.post('/:simId/hypotheses', (req, res) => {
     collapsed,
     sort_order,
     storeDistributionMode,
+    zoneId,
   } = req.body;
-  db.prepare(`INSERT INTO hypotheses (id, simulation_id, name, max_budget_per_store, objective_mode, budget_mode, total_budget, retrocommission_percent, collapsed, sort_order, store_distribution_mode)
-    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`)
+  db.prepare(`INSERT INTO hypotheses (id, simulation_id, name, max_budget_per_store, objective_mode, budget_mode, total_budget, retrocommission_percent, collapsed, sort_order, store_distribution_mode, zone_id)
+    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`)
     .run(
       id,
       req.params.simId,
@@ -243,12 +246,13 @@ router.post('/:simId/hypotheses', (req, res) => {
       collapsed ? 1 : 0,
       sort_order ?? 0,
       storeDistributionMode ?? 'egal',
+      zoneId ?? 'zone1',
     );
   res.status(201).json({ id });
 });
 
 router.put('/:simId/hypotheses/:id', (req, res) => {
-  const { name, maxBudgetPerStore, objectiveMode, budgetMode, totalBudget, retrocommissionPercent, collapsed, storeDistributionMode } = req.body;
+  const { name, maxBudgetPerStore, objectiveMode, budgetMode, totalBudget, retrocommissionPercent, collapsed, storeDistributionMode, zoneId } = req.body;
   db.prepare(`UPDATE hypotheses SET
     name = COALESCE(?, name),
     max_budget_per_store = COALESCE(?, max_budget_per_store),
@@ -257,7 +261,8 @@ router.put('/:simId/hypotheses/:id', (req, res) => {
     total_budget = COALESCE(?, total_budget),
     retrocommission_percent = COALESCE(?, retrocommission_percent),
     collapsed = COALESCE(?, collapsed),
-    store_distribution_mode = COALESCE(?, store_distribution_mode)
+    store_distribution_mode = COALESCE(?, store_distribution_mode),
+    zone_id = COALESCE(?, zone_id)
     WHERE id = ? AND simulation_id = ?`)
     .run(
       name,
@@ -268,6 +273,7 @@ router.put('/:simId/hypotheses/:id', (req, res) => {
       retrocommissionPercent,
       collapsed !== undefined ? (collapsed ? 1 : 0) : undefined,
       storeDistributionMode,
+      zoneId,
       req.params.id,
       req.params.simId,
     );

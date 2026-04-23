@@ -13,8 +13,9 @@ import type {
   LeverConfig,
   GlobalParams,
   Prestation,
+  ZoneId,
 } from '../types';
-import { LEVER_CONFIGS as INITIAL_LEVER_CONFIGS, DEFAULT_STORES as INITIAL_STORES, DEFAULT_PRESETS, STORE_POPULATIONS, getZoneMultiplier } from '../data/defaults';
+import { LEVER_CONFIGS as INITIAL_LEVER_CONFIGS, DEFAULT_STORES as INITIAL_STORES, DEFAULT_PRESETS, getZoneAvgPop } from '../data/defaults';
 import { api } from '../services/api';
 import { useProfileStore } from './profileStore';
 import { useVersionStore } from './versionStore';
@@ -149,8 +150,18 @@ function largestRemainderToIntegers(raw: number[], targetSum: number): number[] 
   return out;
 }
 
+/** Retourne la population d'un magasin pour la zone donnée. */
+function storeZonePop(store: Store, zoneId: ZoneId | undefined): number {
+  switch (zoneId) {
+    case 'zone2': return store.pop20min ?? store.population ?? 0;
+    case 'zone3': return store.pop30min ?? store.population ?? 0;
+    case 'zone4': return store.popCustom ?? store.population ?? 0;
+    default:      return store.pop10min ?? store.population ?? 0;
+  }
+}
+
 /** Répartition « pure » du montant (sans plancher par magasin). */
-function allocateStoreBudgetsCore(totalBudget: number, stores: Store[], mode: StoreDistributionMode): number[] {
+function allocateStoreBudgetsCore(totalBudget: number, stores: Store[], mode: StoreDistributionMode, zoneId?: ZoneId): number[] {
   const n = stores.length;
   if (n === 0) return [];
   const tb = Math.max(0, Math.round(totalBudget));
@@ -160,7 +171,7 @@ function allocateStoreBudgetsCore(totalBudget: number, stores: Store[], mode: St
     return largestRemainderToIntegers(new Array(n).fill(tb / n), tb);
   }
   if (mode === 'population') {
-    const pops = stores.map(s => Math.max(0, s.population || 0));
+    const pops = stores.map(s => Math.max(0, storeZonePop(s, zoneId)));
     const sum = pops.reduce((a, b) => a + b, 0);
     if (sum <= 0) {
       return largestRemainderToIntegers(new Array(n).fill(tb / n), tb);
@@ -171,7 +182,7 @@ function allocateStoreBudgetsCore(totalBudget: number, stores: Store[], mode: St
     );
   }
   // pondere : part population × (poids/100) ; 100% = identique à « population » ; puis normalisation sur le total.
-  const pops = stores.map(s => Math.max(0, s.population || 0));
+  const pops = stores.map(s => Math.max(0, storeZonePop(s, zoneId)));
   const sumPop = pops.reduce((a, b) => a + b, 0);
   const popShare =
     sumPop > 0
@@ -203,6 +214,7 @@ export function allocateStoreBudgets(
   stores: Store[],
   mode: StoreDistributionMode,
   minPerStore = 0,
+  zoneId?: ZoneId,
 ): number[] {
   const n = stores.length;
   if (n === 0) return [];
@@ -210,17 +222,17 @@ export function allocateStoreBudgets(
   if (tb === 0) return new Array(n).fill(0);
 
   const m = Math.max(0, Math.round(minPerStore));
-  if (m === 0) return allocateStoreBudgetsCore(tb, stores, mode);
+  if (m === 0) return allocateStoreBudgetsCore(tb, stores, mode, zoneId);
 
   if (m * n > tb) {
-    return allocateStoreBudgetsCore(tb, stores, mode);
+    return allocateStoreBudgetsCore(tb, stores, mode, zoneId);
   }
 
   if (m * n === tb) {
     return new Array(n).fill(m);
   }
 
-  const extra = allocateStoreBudgetsCore(tb - m * n, stores, mode);
+  const extra = allocateStoreBudgetsCore(tb - m * n, stores, mode, zoneId);
   return new Array(n).fill(m).map((base, i) => base + (extra[i] ?? 0));
 }
 
@@ -366,7 +378,7 @@ interface SimulationState {
   // Admin - Stores
   addStore: (name: string) => void;
   removeStore: (id: string) => void;
-  updateStore: (id: string, updates: Partial<Pick<Store, 'name' | 'population' | 'budgetWeightPercent'>>) => void;
+  updateStore: (id: string, updates: Partial<Pick<Store, 'name' | 'population' | 'pop10min' | 'pop20min' | 'pop30min' | 'popCustom' | 'budgetWeightPercent'>>) => void;
   importStoresFromExcel: (file: File, mode: 'replace' | 'append') => Promise<void>;
 
   // Admin - Global params
@@ -428,9 +440,9 @@ function equalBudgetPercents(levers: Lever[]): Lever[] {
   }));
 }
 
-function recalcHypothesis(h: Hypothesis, _simStart: string, _simEnd: string, configs: Record<string, LeverConfig>, avgPop: number, storeCount: number): Hypothesis {
+function recalcHypothesis(h: Hypothesis, _simStart: string, _simEnd: string, configs: Record<string, LeverConfig>, stores: Store[], storeCount: number): Hypothesis {
   const updated = { ...h, levers: h.levers.map(l => ({ ...l })) };
-  const zoneAvgPop = avgPop * getZoneMultiplier(h.zoneId);
+  const zoneAvgPop = getZoneAvgPop(stores, h.zoneId);
 
   // V2 objectif couverture : on ne recalcule PAS la couverture / budget depuis
   // budgetMode. Le slider de couverture globale et les modifications manuelles
@@ -502,10 +514,12 @@ function recalcHypothesis(h: Hypothesis, _simStart: string, _simEnd: string, con
   return updated;
 }
 
-// Initialize stores with populations from STORE_POPULATIONS
 const initialStores: Store[] = INITIAL_STORES.map(s => ({
   ...s,
-  population: STORE_POPULATIONS[s.id] || 140000,
+  pop10min: s.pop10min ?? s.population ?? 0,
+  pop20min: s.pop20min ?? s.population ?? 0,
+  pop30min: s.pop30min ?? s.population ?? 0,
+  popCustom: s.popCustom ?? 0,
 }));
 
 export const useSimulationStore = create<SimulationState>((set, get) => ({
@@ -567,7 +581,6 @@ export const useSimulationStore = create<SimulationState>((set, get) => ({
       }
 
       const sc = stores.length || 1;
-      const avgPop = safeGlobalParams.defaultPopulation;
 
       // Normalize hypotheses, then recalc lever budgets/impressions (API load skips updateHypothesis → recalc)
       if (simulation) {
@@ -584,7 +597,7 @@ export const useSimulationStore = create<SimulationState>((set, get) => ({
                 ? h.budgetsByMode
                 : { [h.budgetMode]: h.totalBudget },
             };
-            return recalcHypothesis(normalized, start, end, leverConfigs, avgPop, sc);
+            return recalcHypothesis(normalized, start, end, leverConfigs, stores, sc);
           }),
         };
       }
@@ -709,7 +722,6 @@ export const useSimulationStore = create<SimulationState>((set, get) => ({
   updateHypothesis: (id, updates) => {
     set(state => {
       if (!state.simulation) return state;
-      const avgPop = state.globalParams.defaultPopulation;
       const sc = state.stores.length;
       const hypotheses = state.simulation.hypotheses.map(h => {
         if (h.id !== id) return h;
@@ -728,18 +740,18 @@ export const useSimulationStore = create<SimulationState>((set, get) => ({
           }
 
           const updated = { ...h, ...updates, budgetsByMode: savedBudgets, totalBudget: restoredBudget, levers };
-          return recalcHypothesis(updated, state.simulation!.startDate, state.simulation!.endDate, state.leverConfigs, avgPop, sc);
+          return recalcHypothesis(updated, state.simulation!.startDate, state.simulation!.endDate, state.leverConfigs, state.stores, sc);
         }
 
         // When updating totalBudget explicitly, save to current mode's budget
         if (updates.totalBudget !== undefined && !updates.budgetMode) {
           const updatedBudgetsByMode = { ...(h.budgetsByMode || {}), [h.budgetMode]: updates.totalBudget };
           const updated = { ...h, ...updates, budgetsByMode: updatedBudgetsByMode };
-          return recalcHypothesis(updated, state.simulation!.startDate, state.simulation!.endDate, state.leverConfigs, avgPop, sc);
+          return recalcHypothesis(updated, state.simulation!.startDate, state.simulation!.endDate, state.leverConfigs, state.stores, sc);
         }
 
         const updated = { ...h, ...updates };
-        return recalcHypothesis(updated, state.simulation!.startDate, state.simulation!.endDate, state.leverConfigs, avgPop, sc);
+        return recalcHypothesis(updated, state.simulation!.startDate, state.simulation!.endDate, state.leverConfigs, state.stores, sc);
       });
       const recalced = hypotheses.find(h => h.id === id);
       if (recalced) {
@@ -753,6 +765,7 @@ export const useSimulationStore = create<SimulationState>((set, get) => ({
             retrocommissionPercent: recalced.retrocommissionPercent ?? 0,
             collapsed: recalced.collapsed,
             storeDistributionMode: recalced.storeDistributionMode ?? 'egal',
+            zoneId: recalced.zoneId ?? 'zone1',
           }).catch(console.error);
           recalced.levers.forEach(l => {
             api.putLever(id, l.id, l).catch(console.error);
@@ -783,7 +796,6 @@ export const useSimulationStore = create<SimulationState>((set, get) => ({
       if (!state.simulation) return state;
       const preset = state.presets.find(p => p.id === presetId);
       if (!preset) return state;
-      const avgPop = state.globalParams.defaultPopulation;
       const sc = state.stores.length;
 
       const hypotheses = state.simulation.hypotheses.map(h => {
@@ -813,7 +825,7 @@ export const useSimulationStore = create<SimulationState>((set, get) => ({
           prev: { totalBudget: h.totalBudget, maxBudgetPerStore: h.maxBudgetPerStore, leverCount: h.levers.length },
           next: { totalBudget: nextBudget, maxBudgetPerStore: nextMaxPerStore, leverCount: levers.length },
         };
-        return recalcHypothesis(updated, state.simulation!.startDate, state.simulation!.endDate, state.leverConfigs, avgPop, sc);
+        return recalcHypothesis(updated, state.simulation!.startDate, state.simulation!.endDate, state.leverConfigs, state.stores, sc);
       });
 
       const recalced = hypotheses.find(h => h.id === hypothesisId);
@@ -894,7 +906,6 @@ export const useSimulationStore = create<SimulationState>((set, get) => ({
       if (!state.simulation) return state;
       const config = state.leverConfigs[leverType];
       if (!config) return state;
-      const avgPop = state.globalParams.defaultPopulation;
       const sc = state.stores.length;
 
       const startDate = state.simulation.startDate;
@@ -933,7 +944,7 @@ export const useSimulationStore = create<SimulationState>((set, get) => ({
         // Auto-equalize percentages in pctTotal mode
         const adjustedLevers = h.budgetMode === 'pctTotal' ? equalBudgetPercents(newLevers) : newLevers;
         const updated = { ...h, levers: adjustedLevers };
-        return recalcHypothesis(updated, state.simulation!.startDate, state.simulation!.endDate, state.leverConfigs, avgPop, sc);
+        return recalcHypothesis(updated, state.simulation!.startDate, state.simulation!.endDate, state.leverConfigs, state.stores, sc);
       });
 
       api.postLever(hypothesisId, { ...lever, sort_order: hypotheses.find(h => h.id === hypothesisId)?.levers.length ?? 0 }).catch(console.error);
@@ -945,7 +956,6 @@ export const useSimulationStore = create<SimulationState>((set, get) => ({
   removeLever: (hypothesisId, leverId) => {
     set(state => {
       if (!state.simulation) return state;
-      const avgPop = state.globalParams.defaultPopulation;
       const sc = state.stores.length;
       const hypotheses = state.simulation.hypotheses.map(h => {
         if (h.id !== hypothesisId) return h;
@@ -953,7 +963,7 @@ export const useSimulationStore = create<SimulationState>((set, get) => ({
         // Re-equalize percentages in pctTotal mode after removal
         const adjustedLevers = h.budgetMode === 'pctTotal' ? equalBudgetPercents(filteredLevers) : filteredLevers;
         const updated = { ...h, levers: adjustedLevers };
-        return recalcHypothesis(updated, state.simulation!.startDate, state.simulation!.endDate, state.leverConfigs, avgPop, sc);
+        return recalcHypothesis(updated, state.simulation!.startDate, state.simulation!.endDate, state.leverConfigs, state.stores, sc);
       });
       api.deleteLever(hypothesisId, leverId).catch(console.error);
       return { simulation: { ...state.simulation, hypotheses } };
@@ -963,7 +973,6 @@ export const useSimulationStore = create<SimulationState>((set, get) => ({
   updateLever: (hypothesisId, leverId, updates) => {
     set(state => {
       if (!state.simulation) return state;
-      const avgPop = state.globalParams.defaultPopulation;
       const sc = state.stores.length;
       const hypotheses = state.simulation.hypotheses.map(h => {
         if (h.id !== hypothesisId) return h;
@@ -1007,7 +1016,7 @@ export const useSimulationStore = create<SimulationState>((set, get) => ({
             }
           }
         }
-        return recalcHypothesis({ ...h, levers }, state.simulation!.startDate, state.simulation!.endDate, state.leverConfigs, avgPop, sc);
+        return recalcHypothesis({ ...h, levers }, state.simulation!.startDate, state.simulation!.endDate, state.leverConfigs, state.stores, sc);
       });
       debouncedCall(`lever-${leverId}`, () => api.putLever(hypothesisId, leverId, updates).catch(console.error));
       // Persister aussi les leviers dont budgetPercent a été redistribué
@@ -1039,12 +1048,11 @@ export const useSimulationStore = create<SimulationState>((set, get) => ({
   updateLeverBudget: (hypothesisId, leverId, budget) => {
     set(state => {
       if (!state.simulation) return state;
-      const basePop = state.globalParams.defaultPopulation;
       const sc = state.stores.length;
       const version = useVersionStore.getState().activeVersion;
       const hypotheses = state.simulation.hypotheses.map(h => {
         if (h.id !== hypothesisId) return h;
-        const avgPop = basePop * getZoneMultiplier(h.zoneId);
+        const avgPop = getZoneAvgPop(state.stores, h.zoneId);
         const levers = h.levers.map(l => {
           if (l.id !== leverId) return l;
           const newL = { ...l, budget };
@@ -1114,12 +1122,11 @@ export const useSimulationStore = create<SimulationState>((set, get) => ({
   updateLeverCoverage: (hypothesisId, leverId, coverage) => {
     set(state => {
       if (!state.simulation) return state;
-      const basePop = state.globalParams.defaultPopulation;
       const sc = state.stores.length;
       const version = useVersionStore.getState().activeVersion;
       const hypotheses = state.simulation.hypotheses.map(h => {
         if (h.id !== hypothesisId) return h;
-        const avgPop = basePop * getZoneMultiplier(h.zoneId);
+        const avgPop = getZoneAvgPop(state.stores, h.zoneId);
         const levers = h.levers.map(l => {
           if (l.id !== leverId) return l;
           const newL = { ...l, coverage };
@@ -1163,12 +1170,11 @@ export const useSimulationStore = create<SimulationState>((set, get) => ({
   updateLeverRepetition: (hypothesisId, leverId, repetition) => {
     set(state => {
       if (!state.simulation) return state;
-      const basePop = state.globalParams.defaultPopulation;
       const sc = state.stores.length;
       const version = useVersionStore.getState().activeVersion;
       const hypotheses = state.simulation.hypotheses.map(h => {
         if (h.id !== hypothesisId) return h;
-        const avgPop = basePop * getZoneMultiplier(h.zoneId);
+        const avgPop = getZoneAvgPop(state.stores, h.zoneId);
         const levers = h.levers.map(l => {
           if (l.id !== leverId) return l;
           const newL = { ...l, repetition };
@@ -1213,12 +1219,11 @@ export const useSimulationStore = create<SimulationState>((set, get) => ({
   setHypothesisTargetCoverage: (hypothesisId, targetAvg) => {
     set(state => {
       if (!state.simulation) return state;
-      const basePop = state.globalParams.defaultPopulation;
       const sc = state.stores.length;
       const hypotheses = state.simulation.hypotheses.map(h => {
         if (h.id !== hypothesisId) return h;
         if (h.levers.length === 0) return h;
-        const avgPop = basePop * getZoneMultiplier(h.zoneId);
+        const avgPop = getZoneAvgPop(state.stores, h.zoneId);
         const maxes = h.levers.map(l => l.maxCoverage);
         const coverages = distributeCoverageWaterfill(targetAvg, maxes);
         const levers = h.levers.map((l, i) => {
@@ -1338,9 +1343,9 @@ export const useSimulationStore = create<SimulationState>((set, get) => ({
     const id = uid();
     const population = get().globalParams.defaultPopulation;
     set(state => ({
-      stores: [...state.stores, { id, name, population, budgetWeightPercent: 100 }],
+      stores: [...state.stores, { id, name, population, pop10min: population, pop20min: population, pop30min: population, popCustom: 0, budgetWeightPercent: 100 }],
     }));
-    api.postStore({ id, name, population, budgetWeightPercent: 100 }).catch(console.error);
+    api.postStore({ id, name, population, pop10min: population, pop20min: population, pop30min: population, popCustom: 0, budgetWeightPercent: 100 }).catch(console.error);
   },
 
   removeStore: (id) => {
@@ -1418,10 +1423,12 @@ export const useSimulationStore = create<SimulationState>((set, get) => ({
     const h = state.simulation.hypotheses.find(h => h.id === id);
     if (!h || h.levers.length === 0) return null;
 
-    const storeCount = state.stores.length;
-    const totalBudget = h.budgetMode === 'levier' || h.budgetMode === 'libre'
-      ? h.levers.reduce((s, l) => s + l.budget, 0)
-      : h.totalBudget;
+    // Toujours utiliser la dépense RÉELLE (somme des budgets leviers) pour la
+    // ventilation par magasin. En modes `automatique` / `pctTotal` / couverture,
+    // h.totalBudget est l'objectif saisi ; la dépense réelle peut différer
+    // (plafonnement maxCoverage, recalcul via avgPop au changement de zone…),
+    // et c'est cette dépense qui doit être répartie sur les magasins.
+    const totalBudget = h.levers.reduce((s, l) => s + l.budget, 0);
 
     // Couverture dédupliquée : 1 - ∏(1 - couv_i/100) — alignée sur le récap, répétition moyenne des leviers
     const coverageDetail = h.levers.map(l => ({ name: l.type, coverage: l.coverage }));
@@ -1434,13 +1441,14 @@ export const useSimulationStore = create<SimulationState>((set, get) => ({
       : 0;
 
     const distMode: StoreDistributionMode = h.storeDistributionMode ?? 'egal';
+    const zoneId = h.zoneId ?? 'zone1';
     const minPerStoreFromLevers =
       h.levers.length > 0 ? h.levers.reduce((s, l) => s + l.minBudgetPerStore, 0) : 0;
-    const parts = allocateStoreBudgets(totalBudget, state.stores, distMode, Math.round(minPerStoreFromLevers));
+    const parts = allocateStoreBudgets(totalBudget, state.stores, distMode, Math.round(minPerStoreFromLevers), zoneId);
     const storeBudgets = state.stores.map((store, i) => ({
       id: store.id,
       name: store.name,
-      population: store.population,
+      population: storeZonePop(store, zoneId),
       weightPercent: store.budgetWeightPercent ?? 100,
       budget: parts[i] ?? 0,
       coverage: deduplicatedCoverage,
