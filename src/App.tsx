@@ -1,3 +1,5 @@
+'use client';
+
 import { useEffect, useRef } from 'react';
 import { useSimulationStore } from './store/simulationStore';
 import { useProfileStore } from './store/profileStore';
