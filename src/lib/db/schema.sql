@@ -162,7 +162,35 @@ CREATE TABLE IF NOT EXISTS history (
 CREATE INDEX IF NOT EXISTS idx_history_ts ON history(ts DESC);
 CREATE INDEX IF NOT EXISTS idx_history_profile ON history(profile_id);
 
--- Incremental upgrades: safe to run against an existing DB (IF NOT EXISTS / IF NOT EXISTS columns)
-ALTER TABLE hypotheses ADD COLUMN IF NOT EXISTS included_in_hypothesis INTEGER NOT NULL DEFAULT 1;
-ALTER TABLE levers     ADD COLUMN IF NOT EXISTS included_in_hypothesis INTEGER NOT NULL DEFAULT 1;
-ALTER TABLE prestations ADD COLUMN IF NOT EXISTS from_preset INTEGER NOT NULL DEFAULT 0;
+-- Incremental upgrades: safe to run against an existing DB
+ALTER TABLE hypotheses  ADD COLUMN IF NOT EXISTS included_in_hypothesis INTEGER NOT NULL DEFAULT 1;
+ALTER TABLE levers      ADD COLUMN IF NOT EXISTS included_in_hypothesis INTEGER NOT NULL DEFAULT 1;
+ALTER TABLE prestations ADD COLUMN IF NOT EXISTS from_preset            INTEGER NOT NULL DEFAULT 0;
+
+-- Migrate prestations.simulation_id → hypothesis_id (idempotent)
+DO $$
+BEGIN
+  IF EXISTS (
+    SELECT 1 FROM information_schema.columns
+    WHERE table_name = 'prestations' AND column_name = 'simulation_id'
+  ) THEN
+    ALTER TABLE prestations ADD COLUMN IF NOT EXISTS hypothesis_id TEXT;
+    UPDATE prestations p SET hypothesis_id = (
+      SELECT h.id FROM hypotheses h
+      WHERE h.simulation_id = p.simulation_id
+      ORDER BY h.sort_order
+      LIMIT 1
+    ) WHERE hypothesis_id IS NULL;
+    DELETE FROM prestations WHERE hypothesis_id IS NULL;
+    ALTER TABLE prestations ALTER COLUMN hypothesis_id SET NOT NULL;
+    IF NOT EXISTS (
+      SELECT 1 FROM information_schema.table_constraints tc
+      JOIN information_schema.constraint_column_usage ccu ON tc.constraint_name = ccu.constraint_name
+      WHERE tc.table_name = 'prestations' AND ccu.column_name = 'hypothesis_id' AND tc.constraint_type = 'FOREIGN KEY'
+    ) THEN
+      ALTER TABLE prestations ADD CONSTRAINT prestations_hypothesis_id_fkey
+        FOREIGN KEY (hypothesis_id) REFERENCES hypotheses(id) ON DELETE CASCADE;
+    END IF;
+    ALTER TABLE prestations DROP COLUMN simulation_id;
+  END IF;
+END $$;
