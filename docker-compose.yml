@@ -1,0 +1,15 @@
+services:
+  postgres:
+    image: postgres:16
+    container_name: tortank-postgres
+    environment:
+      POSTGRES_USER: postgres
+      POSTGRES_PASSWORD: postgres
+      POSTGRES_DB: tortank
+    ports:
+      - "5432:5432"
+    volumes:
+      - tortank-pgdata:/var/lib/postgresql/data
+
+volumes:
+  tortank-pgdata:
