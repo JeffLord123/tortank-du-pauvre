@@ -25,3 +25,8 @@ __MACOSX
 *.njsproj
 *.sln
 *.sw?
+.vercel
+.env*.local
+.next
+*.db-shm
+*.db-wal
