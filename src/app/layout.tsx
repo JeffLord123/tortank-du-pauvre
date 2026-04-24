@@ -1,5 +1,8 @@
 import type { Metadata } from 'next';
 import './globals.css';
+import { THEME_STORAGE_KEY } from '../theme';
+
+const themeBootScript = `(function(){try{var h=document.documentElement,k=${JSON.stringify(THEME_STORAGE_KEY)};h.classList.remove("light","dark");h.classList.add(localStorage.getItem(k)==="light"?"light":"dark");}catch(e){document.documentElement.classList.add("dark");}})();`;
 
 export const metadata: Metadata = {
   title: 'Tortank',
@@ -7,8 +10,9 @@ export const metadata: Metadata = {
 
 export default function RootLayout({ children }: { children: React.ReactNode }) {
   return (
-    <html lang="fr" className="dark">
+    <html lang="fr" suppressHydrationWarning>
       <head>
+        <script dangerouslySetInnerHTML={{ __html: themeBootScript }} />
         <link rel="preconnect" href="https://fonts.googleapis.com" />
         <link rel="preconnect" href="https://fonts.gstatic.com" crossOrigin="anonymous" />
         <link

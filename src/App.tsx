@@ -16,6 +16,7 @@ import { consumePendingProductTour } from './productTour/storage';
 
 function App() {
   const simulation = useSimulationStore(s => s.simulation);
+  const apiReady = useSimulationStore(s => s.apiReady);
   const showComparison = useSimulationStore(s => s.showComparison);
   const initFromAPI = useSimulationStore(s => s.initFromAPI);
 
@@ -57,6 +58,13 @@ function App() {
   }
 
   if (!simulation) {
+    if (!apiReady) {
+      return (
+        <div className="min-h-screen flex items-center justify-center bg-navy-950 text-fg/55 text-sm">
+          Chargement…
+        </div>
+      );
+    }
     return <SimulationSetup />;
   }
 

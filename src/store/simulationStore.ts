@@ -710,6 +710,7 @@ export const useSimulationStore = create<SimulationState>((set, get) => ({
       showComparison: false,
       showAdmin: false,
       appliedPresets: {},
+      apiReady: false,
     });
     try {
       const [globalParams, leverConfigsArr, stores, presets, simulations] = await Promise.all([
@@ -778,7 +779,7 @@ export const useSimulationStore = create<SimulationState>((set, get) => ({
       });
     } catch (err) {
       console.warn('API not available, using local defaults.', err);
-      set({ apiReady: false });
+      set({ apiReady: true });
     }
   },
 
