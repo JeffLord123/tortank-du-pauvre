@@ -1,4 +1,12 @@
-import { useState, useEffect } from 'react';
+import { useState, useEffect, type KeyboardEvent } from 'react';
+
+/** Blur the field on Enter so the same commit path runs as on outside click (formatting, history, etc.). */
+export function blurOnEnter(e: KeyboardEvent<HTMLInputElement>) {
+  if (e.key === 'Enter') {
+    e.preventDefault();
+    e.currentTarget.blur();
+  }
+}
 
 interface Props {
   value: number;
@@ -78,7 +86,11 @@ export function PlainNumericInput({
       className={className}
       onFocus={() => {
         setFocused(true);
-        setDisplay(formatPlainNumericDisplay(value, step));
+        if (value === 0) {
+          setDisplay('');
+        } else {
+          setDisplay(formatPlainNumericDisplay(value, step));
+        }
       }}
       onChange={e => {
         const raw = e.target.value;
@@ -92,6 +104,7 @@ export function PlainNumericInput({
         setFocused(false);
         commit(display);
       }}
+      onKeyDown={blurOnEnter}
     />
   );
 }
@@ -111,7 +124,8 @@ export default function NumInput({ value, onChange, min, max, className, disable
   const handleFocus = () => {
     if (disabled) return;
     setFocused(true);
-    setDisplay(String(Math.round(value)));
+    const rounded = Math.round(value);
+    setDisplay(rounded === 0 ? '' : String(rounded));
   };
 
   const handleChange = (e: React.ChangeEvent<HTMLInputElement>) => {
@@ -143,6 +157,7 @@ export default function NumInput({ value, onChange, min, max, className, disable
       onFocus={handleFocus}
       onChange={handleChange}
       onBlur={handleBlur}
+      onKeyDown={blurOnEnter}
       className={className}
     />
   );

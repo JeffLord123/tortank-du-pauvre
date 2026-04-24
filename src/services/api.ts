@@ -50,6 +50,8 @@ export const api = {
   postPreset: (p: Omit<Preset, 'id'> & { id?: string }) =>
     req<Preset>('POST', '/presets', p),
   deletePreset: (id: string) => req<void>('DELETE', `/presets/${id}`),
+  patchPreset: (id: string, updates: { name?: string; description?: string }) =>
+    req<Preset>('PATCH', `/presets/${id}`, updates),
   reorderPresets: (ids: string[]) => req<void>('PATCH', '/presets/reorder', { ids }),
 
   // ── Simulations ──────────────────────────────────────────────
@@ -81,13 +83,13 @@ export const api = {
   deleteLever: (hypId: string, id: string) =>
     req<void>('DELETE', `/hypotheses/${hypId}/levers/${id}`),
 
-  // ── Prestations ──────────────────────────────────────────────
-  postPrestation: (simId: string, p: Prestation) =>
-    req<{ id: string }>('POST', `/simulations/${simId}/prestations`, p),
-  putPrestation: (simId: string, id: string, updates: Partial<Prestation>) =>
-    req<{ id: string }>('PUT', `/simulations/${simId}/prestations/${id}`, updates),
-  deletePrestation: (simId: string, id: string) =>
-    req<void>('DELETE', `/simulations/${simId}/prestations/${id}`),
+  // ── Prestations (par hypothèse) ───────────────────────────────
+  postPrestation: (hypId: string, p: Prestation) =>
+    req<{ id: string }>('POST', `/hypotheses/${hypId}/prestations`, p),
+  putPrestation: (hypId: string, id: string, updates: Partial<Prestation>) =>
+    req<{ id: string }>('PUT', `/hypotheses/${hypId}/prestations/${id}`, updates),
+  deletePrestation: (hypId: string, id: string) =>
+    req<void>('DELETE', `/hypotheses/${hypId}/prestations/${id}`),
 
   // ── Replace (used by undo/redo) ──────────────────────────────
   replaceSimulation: (id: string, body: {
@@ -95,7 +97,7 @@ export const api = {
     startDate?: string;
     endDate?: string;
     profileId?: string | null;
-    hypotheses: Array<Hypothesis & { levers: Lever[] }>;
+    hypotheses: Array<Hypothesis & { levers: Lever[]; prestations?: Prestation[] }>;
   }) => req<Simulation>('PUT', `/simulations/${id}/replace`, body),
 
   // ── History ──────────────────────────────────────────────────
@@ -121,4 +123,7 @@ export const api = {
     snapshot: unknown;
   }) => req<{ id: number; ts: string }>('POST', '/history', entry),
   deleteHistory: (id: number) => req<void>('DELETE', `/history/${id}`),
+
+  /** Vide simulations, hypotheses, leviers (équivalent `npm run clean` dans server/). */
+  postMaintenanceClean: () => req<{ ok: boolean; cleaned: string[] }>('POST', '/maintenance/clean'),
 };

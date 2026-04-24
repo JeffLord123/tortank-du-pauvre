@@ -68,6 +68,18 @@ CREATE TABLE IF NOT EXISTS preset_levers (
   sort_order           INTEGER NOT NULL DEFAULT 0
 );
 
+CREATE TABLE IF NOT EXISTS preset_prestations (
+  id              TEXT PRIMARY KEY,
+  preset_id       TEXT NOT NULL REFERENCES presets(id) ON DELETE CASCADE,
+  name            TEXT NOT NULL DEFAULT '',
+  category        TEXT,
+  quantity        INTEGER NOT NULL DEFAULT 1,
+  production_cost DOUBLE PRECISION NOT NULL DEFAULT 0,
+  price           DOUBLE PRECISION NOT NULL DEFAULT 0,
+  offered         INTEGER NOT NULL DEFAULT 0,
+  sort_order      INTEGER NOT NULL DEFAULT 0
+);
+
 -- Timestamps stored as TEXT matching SQLite's datetime('now') format: 'YYYY-MM-DD HH24:MI:SS'
 CREATE TABLE IF NOT EXISTS simulations (
   id         TEXT PRIMARY KEY,
@@ -91,7 +103,8 @@ CREATE TABLE IF NOT EXISTS hypotheses (
   collapsed               INTEGER NOT NULL DEFAULT 0,
   sort_order              INTEGER NOT NULL DEFAULT 0,
   store_distribution_mode TEXT NOT NULL DEFAULT 'egal',
-  zone_id                 TEXT NOT NULL DEFAULT 'zone1'
+  zone_id                 TEXT NOT NULL DEFAULT 'zone1',
+  included_in_hypothesis  INTEGER NOT NULL DEFAULT 1
 );
 
 CREATE TABLE IF NOT EXISTS levers (
@@ -109,20 +122,22 @@ CREATE TABLE IF NOT EXISTS levers (
   impressions          DOUBLE PRECISION NOT NULL DEFAULT 0,
   start_date           TEXT NOT NULL DEFAULT '',
   end_date             TEXT NOT NULL DEFAULT '',
-  collapsed            INTEGER NOT NULL DEFAULT 0,
-  sort_order           INTEGER NOT NULL DEFAULT 0
+  collapsed                INTEGER NOT NULL DEFAULT 0,
+  sort_order               INTEGER NOT NULL DEFAULT 0,
+  included_in_hypothesis   INTEGER NOT NULL DEFAULT 1
 );
 
 CREATE TABLE IF NOT EXISTS prestations (
   id              TEXT PRIMARY KEY,
-  simulation_id   TEXT NOT NULL REFERENCES simulations(id) ON DELETE CASCADE,
+  hypothesis_id   TEXT NOT NULL REFERENCES hypotheses(id) ON DELETE CASCADE,
   name            TEXT NOT NULL DEFAULT '',
   category        TEXT,
   quantity        INTEGER NOT NULL DEFAULT 1,
   production_cost DOUBLE PRECISION NOT NULL DEFAULT 0,
   price           DOUBLE PRECISION NOT NULL DEFAULT 0,
   offered         INTEGER NOT NULL DEFAULT 0,
-  sort_order      INTEGER NOT NULL DEFAULT 0
+  sort_order      INTEGER NOT NULL DEFAULT 0,
+  from_preset     INTEGER NOT NULL DEFAULT 0
 );
 
 CREATE TABLE IF NOT EXISTS excel_uploads (
@@ -146,3 +161,8 @@ CREATE TABLE IF NOT EXISTS history (
 
 CREATE INDEX IF NOT EXISTS idx_history_ts ON history(ts DESC);
 CREATE INDEX IF NOT EXISTS idx_history_profile ON history(profile_id);
+
+-- Incremental upgrades: safe to run against an existing DB (IF NOT EXISTS / IF NOT EXISTS columns)
+ALTER TABLE hypotheses ADD COLUMN IF NOT EXISTS included_in_hypothesis INTEGER NOT NULL DEFAULT 1;
+ALTER TABLE levers     ADD COLUMN IF NOT EXISTS included_in_hypothesis INTEGER NOT NULL DEFAULT 1;
+ALTER TABLE prestations ADD COLUMN IF NOT EXISTS from_preset INTEGER NOT NULL DEFAULT 0;

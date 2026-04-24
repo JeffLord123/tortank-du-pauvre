@@ -18,6 +18,7 @@ import type {
 import { LEVER_CONFIGS as INITIAL_LEVER_CONFIGS, DEFAULT_STORES as INITIAL_STORES, DEFAULT_PRESETS, getZoneAvgPop } from '../data/defaults';
 import { api } from '../services/api';
 import { useProfileStore } from './profileStore';
+import { setPendingProductTour } from '../productTour/storage';
 import { useVersionStore } from './versionStore';
 import { useToastStore } from './toastStore';
 import { formatNum } from '../utils/formatNum';
@@ -29,6 +30,7 @@ function normalizePreset(p: Preset): Preset {
     ...p,
     scope,
     ownerProfileId: scope === 'user' ? (p.ownerProfileId ?? null) : null,
+    prestations: Array.isArray(p.prestations) ? p.prestations : [],
   };
 }
 
@@ -236,26 +238,128 @@ export function allocateStoreBudgets(
   return new Array(n).fill(m).map((base, i) => base + (extra[i] ?? 0));
 }
 
+const BUDGET_STORE_STEP = 50;
+
+/**
+ * Ajuste des budgets déjà ventilés pour viser des montants en tranches de 50 €,
+ * en conservant la somme et en restant proche de la répartition d’origine
+ * (les magasins les plus « sous-alloués » reçoivent les tranches de 50 en priorité).
+ * Si le total n’est pas un multiple de 50, le reliquat (≤ 49 €) est ajouté sur un seul magasin.
+ * Quand `minPerStore` est effectif (somme des minimums atteignable), chaque part reste ≥ ce minimum.
+ */
+export function snapStoreBudgetsToFifty(
+  parts: number[],
+  targetSum: number,
+  minPerStore: number,
+): number[] {
+  const n = parts.length;
+  if (n === 0) return [];
+  const tb = Math.max(0, Math.round(targetSum));
+  if (tb === 0) return new Array(n).fill(0);
+
+  const m = Math.max(0, Math.round(minPerStore));
+  const usedMin = m > 0 && m * n <= tb;
+
+  const b = parts.map(p => {
+    const flo = Math.floor(p / BUDGET_STORE_STEP) * BUDGET_STORE_STEP;
+    return usedMin ? Math.max(m, flo) : flo;
+  });
+
+  let diff = tb - b.reduce((a, x) => a + x, 0);
+
+  const wantAdd = (i: number) => (parts[i] ?? 0) - b[i]!;
+  const wantSub = (i: number) => b[i]! - (parts[i] ?? 0);
+  const minFloor = () => (usedMin ? m : 0);
+
+  for (let guard = 0; guard < n * tb && diff >= BUDGET_STORE_STEP; guard++) {
+    let best = 0;
+    let bestW = -Infinity;
+    for (let i = 0; i < n; i++) {
+      const w = wantAdd(i);
+      if (w > bestW) {
+        bestW = w;
+        best = i;
+      }
+    }
+    b[best]! += BUDGET_STORE_STEP;
+    diff -= BUDGET_STORE_STEP;
+  }
+
+  for (let guard = 0; guard < n * tb && diff <= -BUDGET_STORE_STEP; guard++) {
+    let best = -1;
+    let bestW = -Infinity;
+    for (let i = 0; i < n; i++) {
+      if (b[i]! < minFloor() + BUDGET_STORE_STEP) continue;
+      const w = wantSub(i);
+      if (w > bestW) {
+        bestW = w;
+        best = i;
+      }
+    }
+    if (best < 0) break;
+    b[best]! -= BUDGET_STORE_STEP;
+    diff += BUDGET_STORE_STEP;
+  }
+
+  if (diff !== 0) {
+    let t = 0;
+    for (let i = 1; i < n; i++) {
+      if (diff > 0 && wantAdd(i) > wantAdd(t)) t = i;
+      if (diff < 0 && wantSub(i) > wantSub(t)) t = i;
+    }
+    b[t]! += diff;
+  }
+
+  const s = b.reduce((a, x) => a + x, 0);
+  if (s !== tb && n > 0) b[n - 1]! += tb - s;
+
+  return b;
+}
+
 // ── Warnings ─────────────────────────────────────────────────
 export interface Warning {
   leverId: string;
   type: 'coverage_exceeded' | 'budget_below_min' | 'budget_exceeded' | 'impossible' | 'budget_uncapped';
   kind: 'error' | 'warning' | 'info';
   message: string;
+  /** Alerte « globale » : champ paramètres à mettre en évidence */
+  focusHypothesisField?: 'totalBudget' | 'maxBudgetPerStore' | 'budgetGrid' | 'dedupCoverage';
+  /** Alerte ciblant un levier : rangée (slider) à mettre en évidence */
+  focusLeverControl?: 'budget' | 'coverage' | 'repetition' | 'card';
+}
+
+const PRIMARY_WARNING_KIND_ORDER: Record<Warning['kind'], number> = { error: 0, warning: 1, info: 2 };
+
+/**
+ * Même logique que la bannière : gravité d’abord, puis alertes levier avant globales
+ * (même kind), pour ne pas masquer un levier concret par un message de synthèse.
+ */
+export function getPrimaryWarning(warnings: Warning[]): Warning | null {
+  if (warnings.length === 0) return null;
+  return [...warnings].sort((a, b) => {
+    const d = PRIMARY_WARNING_KIND_ORDER[a.kind] - PRIMARY_WARNING_KIND_ORDER[b.kind];
+    if (d !== 0) return d;
+    const ag = a.leverId === 'global' ? 1 : 0;
+    const bg = b.leverId === 'global' ? 1 : 0;
+    return ag - bg;
+  })[0] ?? null;
 }
 
 function getWarnings(hypothesis: Hypothesis, storeCount: number): Warning[] {
   const warnings: Warning[] = [];
+  const inc = (l: Lever) => l.includedInHypothesis !== false;
+  const active = hypothesis.levers.filter(inc);
 
-  const minTotal = hypothesis.levers.reduce((s, l) => s + l.minBudgetPerStore, 0);
+  const minTotal = active.reduce((s, l) => s + l.minBudgetPerStore, 0);
 
-  for (const lever of hypothesis.levers) {
+  for (const lever of active) {
     if (lever.coverage > lever.maxCoverage) {
       warnings.push({
         leverId: lever.id,
         kind: 'error',
         type: 'coverage_exceeded',
         message: `${lever.type}: Couverture ${lever.coverage}% dépasse le max théorique de ${lever.maxCoverage}%`,
+        focusLeverControl: 'coverage',
       });
     }
     if (lever.budget < lever.minBudgetPerStore * storeCount * 0.8) {
@@ -264,6 +368,7 @@ function getWarnings(hypothesis: Hypothesis, storeCount: number): Warning[] {
         kind: 'warning',
         type: 'budget_below_min',
         message: `${lever.type}: Budget en dessous du minimum recommandé (${lever.minBudgetPerStore}€/mag)`,
+        focusLeverControl: 'budget',
       });
     }
   }
@@ -274,6 +379,7 @@ function getWarnings(hypothesis: Hypothesis, storeCount: number): Warning[] {
       kind: 'warning',
       type: 'budget_exceeded',
       message: `Le budget total dépasse le maximum par magasin (${hypothesis.maxBudgetPerStore}€ × ${storeCount} magasins)`,
+      focusHypothesisField: 'budgetGrid',
     });
   }
 
@@ -283,14 +389,15 @@ function getWarnings(hypothesis: Hypothesis, storeCount: number): Warning[] {
       kind: 'error',
       type: 'impossible',
       message: `Le budget minimum des leviers (${minTotal}€/mag) dépasse le budget max par magasin`,
+      focusHypothesisField: 'maxBudgetPerStore',
     });
   }
 
-  if (hypothesis.budgetMode === 'automatique' && hypothesis.totalBudget > 0 && hypothesis.levers.length > 0) {
-    const budgetUsed = hypothesis.levers.reduce((s, l) => s + l.budget, 0);
+  if (hypothesis.budgetMode === 'automatique' && hypothesis.totalBudget > 0 && active.length > 0) {
+    const budgetUsed = active.reduce((s, l) => s + l.budget, 0);
     const budgetUnused = hypothesis.totalBudget - budgetUsed;
     if (budgetUnused > 1) {
-      const cappedLevers = hypothesis.levers
+      const cappedLevers = active
         .filter(l => l.coverage >= l.maxCoverage)
         .map(l => l.type)
         .join(', ');
@@ -302,6 +409,7 @@ function getWarnings(hypothesis: Hypothesis, storeCount: number): Warning[] {
         kind: 'info',
         type: 'budget_uncapped',
         message: `${formatNum(budgetUnused)}€ non utilisés sur l'objectif de ${formatNum(hypothesis.totalBudget)}€ — ${reason}`,
+        focusHypothesisField: 'totalBudget',
       });
     }
   }
@@ -336,7 +444,13 @@ interface SimulationState {
   initFromAPI: (profileId: string) => Promise<void>;
 
   // Simulation
-  createSimulation: (name: string, startDate: string, endDate: string, cpmId: string) => void;
+  createSimulation: (
+    name: string,
+    startDate: string,
+    endDate: string,
+    cpmId: string,
+    opts?: { productTourFirstTime?: boolean },
+  ) => void;
   updateSimulation: (updates: Partial<Pick<Simulation, 'name' | 'startDate' | 'endDate' | 'cpmId'>>) => void;
 
   // Hypotheses
@@ -363,14 +477,19 @@ interface SimulationState {
   // Admin
   addPreset: (preset: Omit<Preset, 'id'>) => void;
   removePreset: (id: string, ctx?: { isAdmin: boolean; profileId: string | null }) => void;
+  updatePreset: (
+    id: string,
+    updates: Partial<Pick<Preset, 'name' | 'description'>>,
+    ctx?: { isAdmin: boolean; profileId: string | null },
+  ) => void;
   reorderAdminPresets: (ids: string[]) => void;
   toggleComparison: () => void;
   toggleAdmin: () => void;
 
-  // Prestations
-  addPrestation: (p: Omit<Prestation, 'id'>) => void;
-  updatePrestation: (id: string, updates: Partial<Omit<Prestation, 'id'>>) => void;
-  removePrestation: (id: string) => void;
+  // Prestations (par hypothèse)
+  addPrestation: (hypothesisId: string, p: Omit<Prestation, 'id'>) => void;
+  updatePrestation: (hypothesisId: string, id: string, updates: Partial<Omit<Prestation, 'id'>>) => void;
+  removePrestation: (hypothesisId: string, id: string) => void;
 
   // Admin - Lever configs
   updateLeverConfig: (type: string, updates: Partial<LeverConfig>) => void;
@@ -412,7 +531,16 @@ export interface HypothesisSummary {
   generalCoverage: number;
   coverageDetail: { name: string; coverage: number }[];
   avgRepetition: number;
-  leverBreakdown: { name: string; budget: number; impressions: number; color: string }[];
+  leverBreakdown: {
+    id: string;
+    name: string;
+    budget: number;
+    impressions: number;
+    color: string;
+    coverage: number;
+    repetition: number;
+    cpm: number;
+  }[];
   /** Achat total (€) = Σ budget_levier * (purchaseCpm / cpm). */
   purchaseTotal: number;
   /** Total des prestations additionnelles (€). */
@@ -443,6 +571,7 @@ function equalBudgetPercents(levers: Lever[]): Lever[] {
 function recalcHypothesis(h: Hypothesis, _simStart: string, _simEnd: string, configs: Record<string, LeverConfig>, stores: Store[], storeCount: number): Hypothesis {
   const updated = { ...h, levers: h.levers.map(l => ({ ...l })) };
   const zoneAvgPop = getZoneAvgPop(stores, h.zoneId);
+  const inc = (l: Lever) => l.includedInHypothesis !== false;
 
   // V2 objectif couverture : on ne recalcule PAS la couverture / budget depuis
   // budgetMode. Le slider de couverture globale et les modifications manuelles
@@ -452,8 +581,10 @@ function recalcHypothesis(h: Hypothesis, _simStart: string, _simEnd: string, con
 
   if (!isCoverageObjective && h.budgetMode === 'automatique' && h.totalBudget > 0) {
     const msPerWeek = 7 * 24 * 60 * 60 * 1000;
-    const totalPercent = updated.levers.reduce((s, l) => s + (configs[l.type]?.autoBudgetPercent || 0), 0);
+    const active = updated.levers.filter(inc);
+    const totalPercent = active.reduce((s, l) => s + (configs[l.type]?.autoBudgetPercent || 0), 0);
     for (const lever of updated.levers) {
+      if (!inc(lever)) continue;
       const config = configs[lever.type];
       if (config && totalPercent > 0) {
         // Répet fixée par les dates de campagne du levier
@@ -483,6 +614,7 @@ function recalcHypothesis(h: Hypothesis, _simStart: string, _simEnd: string, con
 
   if (!isCoverageObjective && h.budgetMode === 'pctTotal' && h.totalBudget > 0) {
     for (const lever of updated.levers) {
+      if (!inc(lever)) continue;
       lever.budget = Math.round((lever.budgetPercent / 100) * h.totalBudget);
       lever.impressions = calcImpressions(lever.budget, lever.cpm);
       lever.repetition = calcRepetitionFromBudgetAndCoverage(lever.budget, lever.cpm, lever.coverage, zoneAvgPop, storeCount);
@@ -491,9 +623,10 @@ function recalcHypothesis(h: Hypothesis, _simStart: string, _simEnd: string, con
   }
 
   if (h.budgetMode === 'levier' || h.budgetMode === 'libre' || h.budgetMode === 'v3-levier') {
-    updated.totalBudget = updated.levers.reduce((s, l) => s + l.budget, 0);
+    updated.totalBudget = updated.levers.filter(inc).reduce((s, l) => s + l.budget, 0);
     // Budget is fixed by user — recalc coverage from budget with new zone population
     for (const lever of updated.levers) {
+      if (!inc(lever)) continue;
       const newCov = calcCoverageFromBudget(lever.budget, lever.cpm, lever.repetition, lever.maxCoverage, zoneAvgPop, storeCount);
       lever.coverage = newCov;
     }
@@ -502,9 +635,10 @@ function recalcHypothesis(h: Hypothesis, _simStart: string, _simEnd: string, con
   // Mode couverture objectif (V2): coverage is fixed — recalc budget from coverage with new zone population
   if (isCoverageObjective) {
     for (const lever of updated.levers) {
+      if (!inc(lever)) continue;
       lever.budget = calcBudgetFromCoverage(lever.coverage, lever.cpm, lever.repetition, zoneAvgPop, storeCount);
     }
-    updated.totalBudget = updated.levers.reduce((s, l) => s + l.budget, 0);
+    updated.totalBudget = updated.levers.filter(inc).reduce((s, l) => s + l.budget, 0);
   }
 
   for (const lever of updated.levers) {
@@ -536,10 +670,34 @@ export const useSimulationStore = create<SimulationState>((set, get) => ({
   appliedPresets: {},
 
   setAppliedPreset: (hypothesisId, preset) => {
+    if (!preset) {
+      const prev = get().simulation?.hypotheses.find(h => h.id === hypothesisId);
+      const clearIds = (prev?.prestations ?? []).filter(p => p.fromPreset).map(p => p.id);
+      set(state => {
+        if (!state.simulation) {
+          const ap = { ...state.appliedPresets };
+          delete ap[hypothesisId];
+          return { appliedPresets: ap };
+        }
+        const hypotheses = state.simulation.hypotheses.map(h => {
+          if (h.id !== hypothesisId) return h;
+          const prestations = (h.prestations ?? []).map(p =>
+            p.fromPreset ? { ...p, fromPreset: false } : p,
+          );
+          return { ...h, prestations };
+        });
+        const ap = { ...state.appliedPresets };
+        delete ap[hypothesisId];
+        return { appliedPresets: ap, simulation: { ...state.simulation, hypotheses } };
+      });
+      clearIds.forEach(id => {
+        api.putPrestation(hypothesisId, id, { fromPreset: false }).catch(console.error);
+      });
+      return;
+    }
     set(state => {
       const next = { ...state.appliedPresets };
-      if (preset) next[hypothesisId] = preset;
-      else delete next[hypothesisId];
+      next[hypothesisId] = preset;
       return { appliedPresets: next };
     });
   },
@@ -584,13 +742,18 @@ export const useSimulationStore = create<SimulationState>((set, get) => ({
 
       // Normalize hypotheses, then recalc lever budgets/impressions (API load skips updateHypothesis → recalc)
       if (simulation) {
-        const start = simulation.startDate;
-        const end = simulation.endDate;
+        const raw = simulation as Simulation & { prestations?: Prestation[] };
+        const legacyPrestations = raw.prestations;
+        const { prestations: _legacyTop, ...simBase } = raw;
+        const start = simBase.startDate;
+        const end = simBase.endDate;
         simulation = {
-          ...simulation,
-          hypotheses: simulation.hypotheses.map(h => {
+          ...simBase,
+          hypotheses: simBase.hypotheses.map((h, idx) => {
+            const rawPrest = h.prestations !== undefined ? h.prestations : (idx === 0 ? (legacyPrestations ?? []) : []);
             const normalized: Hypothesis = {
               ...h,
+              prestations: rawPrest.map(p => ({ ...p, fromPreset: !!p.fromPreset })),
               zoneId: h.zoneId ?? 'zone1',
               storeDistributionMode: h.storeDistributionMode ?? 'egal',
               budgetsByMode: (h.budgetsByMode && Object.keys(h.budgetsByMode).length > 0)
@@ -620,11 +783,14 @@ export const useSimulationStore = create<SimulationState>((set, get) => ({
   },
 
   // ── Simulation ───────────────────────────────────────────────
-  createSimulation: (name, startDate, endDate, cpmId) => {
+  createSimulation: (name, startDate, endDate, cpmId, opts) => {
     const profileId = useProfileStore.getState().activeProfileId;
     if (!profileId) {
       console.warn('createSimulation: aucun profil actif');
       return;
+    }
+    if (opts?.productTourFirstTime) {
+      setPendingProductTour(profileId);
     }
     const gp = get().globalParams;
     const defaultTotal = gp.typicalBudgetPerStore * (get().stores.length || 1);
@@ -637,6 +803,7 @@ export const useSimulationStore = create<SimulationState>((set, get) => ({
       totalBudget: defaultTotal,
       budgetsByMode: { automatique: defaultTotal },
       levers: [],
+      prestations: [],
       collapsed: false,
       zoneId: 'zone1',
       storeDistributionMode: 'egal',
@@ -670,6 +837,7 @@ export const useSimulationStore = create<SimulationState>((set, get) => ({
         totalBudget,
         budgetsByMode: { [budgetMode]: totalBudget },
         levers: [],
+        prestations: [],
         collapsed: false,
         zoneId: 'zone1',
         retrocommissionPercent: 0,
@@ -691,11 +859,13 @@ export const useSimulationStore = create<SimulationState>((set, get) => ({
         id: uid(),
         name: `${source.name} (copie)`,
         levers: source.levers.map(l => ({ ...l, id: uid() })),
+        prestations: (source.prestations ?? []).map(p => ({ ...p, id: uid(), fromPreset: false })),
       };
       const sim = { ...state.simulation, hypotheses: [...state.simulation.hypotheses, newH] };
       api.postHypothesis(state.simulation.id, { ...newH, sort_order: sim.hypotheses.length - 1 })
         .then(() => {
           newH.levers.forEach((l, i) => api.postLever(newH.id, { ...l, sort_order: i }).catch(console.error));
+          newH.prestations?.forEach(p => api.postPrestation(newH.id, p).catch(console.error));
         })
         .catch(console.error);
       return { simulation: sim, activeHypothesisId: newH.id };
@@ -789,18 +959,31 @@ export const useSimulationStore = create<SimulationState>((set, get) => ({
   },
 
   applyPreset: (presetId, hypothesisId) => {
-    type ToastPayload = { preset: Preset; prev: { totalBudget: number; maxBudgetPerStore: number; leverCount: number }; next: { totalBudget: number; maxBudgetPerStore: number; leverCount: number } };
+    const state0 = get();
+    if (!state0.simulation) return;
+    const preset = state0.presets.find(p => p.id === presetId);
+    if (!preset) return;
+    const h0 = state0.simulation.hypotheses.find(h => h.id === hypothesisId);
+    if (!h0) return;
+    const oldLeverIds = h0.levers.map(l => l.id);
+    const oldPrestationIds = (h0.prestations ?? []).map(p => p.id);
+
+    type ToastPayload = {
+      preset: Preset;
+      prev: { totalBudget: number; maxBudgetPerStore: number; leverCount: number; prestationCount: number };
+      next: { totalBudget: number; maxBudgetPerStore: number; leverCount: number; prestationCount: number };
+    };
     let toastPayload: ToastPayload | null = null;
 
     set(state => {
       if (!state.simulation) return state;
-      const preset = state.presets.find(p => p.id === presetId);
-      if (!preset) return state;
+      const pRef = state.presets.find(p => p.id === presetId);
+      if (!pRef) return state;
       const sc = state.stores.length;
 
       const hypotheses = state.simulation.hypotheses.map(h => {
         if (h.id !== hypothesisId) return h;
-        const levers: Lever[] = preset.levers.map(pl => ({
+        const levers: Lever[] = pRef.levers.map(pl => ({
           ...pl,
           id: uid(),
           purchaseCpm: pl.purchaseCpm ?? state.leverConfigs[pl.type]?.purchaseCpm ?? 0,
@@ -808,37 +991,67 @@ export const useSimulationStore = create<SimulationState>((set, get) => ({
           endDate: pl.endDate || state.simulation!.endDate,
           collapsed: false,
         }));
-        const nextBudget = preset.totalBudget ?? h.totalBudget;
-        const nextMaxPerStore = preset.maxBudgetPerStore ?? h.maxBudgetPerStore;
-        const budgetsByMode = { ...(h.budgetsByMode || {}), [preset.budgetMode]: nextBudget };
+        const prestations: Prestation[] = (pRef.prestations ?? []).map(t => ({
+          id: uid(),
+          name: t.name,
+          category: t.category,
+          quantity: t.quantity ?? 1,
+          productionCost: t.productionCost ?? 0,
+          price: t.offered ? 0 : (t.price ?? 0),
+          offered: !!t.offered,
+          fromPreset: true,
+        }));
+        const nextBudget = pRef.totalBudget ?? h.totalBudget;
+        const nextMaxPerStore = pRef.maxBudgetPerStore ?? h.maxBudgetPerStore;
+        const budgetsByMode = { ...(h.budgetsByMode || {}), [pRef.budgetMode]: nextBudget };
         const updated: Hypothesis = {
           ...h,
-          objectiveMode: preset.objectiveMode,
-          budgetMode: preset.budgetMode,
+          objectiveMode: pRef.objectiveMode,
+          budgetMode: pRef.budgetMode,
           totalBudget: nextBudget,
           maxBudgetPerStore: nextMaxPerStore,
           budgetsByMode,
           levers,
+          prestations,
         };
         toastPayload = {
-          preset,
-          prev: { totalBudget: h.totalBudget, maxBudgetPerStore: h.maxBudgetPerStore, leverCount: h.levers.length },
-          next: { totalBudget: nextBudget, maxBudgetPerStore: nextMaxPerStore, leverCount: levers.length },
+          preset: pRef,
+          prev: {
+            totalBudget: h.totalBudget,
+            maxBudgetPerStore: h.maxBudgetPerStore,
+            leverCount: h.levers.length,
+            prestationCount: (h.prestations ?? []).length,
+          },
+          next: {
+            totalBudget: nextBudget,
+            maxBudgetPerStore: nextMaxPerStore,
+            leverCount: levers.length,
+            prestationCount: prestations.length,
+          },
         };
         return recalcHypothesis(updated, state.simulation!.startDate, state.simulation!.endDate, state.leverConfigs, state.stores, sc);
       });
 
       const recalced = hypotheses.find(h => h.id === hypothesisId);
-      if (recalced) {
-        api.putHypothesis(state.simulation.id, hypothesisId, {
+      if (recalced && state.simulation) {
+        const simId = state.simulation.id;
+        api.putHypothesis(simId, hypothesisId, {
           objectiveMode: recalced.objectiveMode,
           budgetMode: recalced.budgetMode,
           totalBudget: recalced.totalBudget,
           maxBudgetPerStore: recalced.maxBudgetPerStore,
         }).catch(console.error);
-        // Re-sync levers: delete old ones and re-create — handled by cascade + re-post
+        oldLeverIds.forEach(lid => {
+          api.deleteLever(hypothesisId, lid).catch(console.error);
+        });
         recalced.levers.forEach((l, i) => {
           api.postLever(hypothesisId, { ...l, sort_order: i }).catch(console.error);
+        });
+        oldPrestationIds.forEach(pid => {
+          api.deletePrestation(hypothesisId, pid).catch(console.error);
+        });
+        (recalced.prestations ?? []).forEach(p => {
+          api.postPrestation(hypothesisId, p).catch(console.error);
         });
       }
 
@@ -864,6 +1077,7 @@ export const useSimulationStore = create<SimulationState>((set, get) => ({
         lines.push(`Budget max / PDV : ${formatNum(next.maxBudgetPerStore)}€`);
       }
       lines.push(`Leviers : ${prev.leverCount} → ${next.leverCount} (${preset.levers.map(l => l.type).join(', ')})`);
+      lines.push(`Prestations : ${prev.prestationCount} → ${next.prestationCount}`);
       useToastStore.getState().push({
         kind: 'success',
         title: `Preset « ${preset.name} » appliqué`,
@@ -895,6 +1109,14 @@ export const useSimulationStore = create<SimulationState>((set, get) => ({
       totalBudget: h.totalBudget,
       maxBudgetPerStore: h.maxBudgetPerStore,
       levers,
+      prestations: (h.prestations ?? []).map(p => ({
+        name: p.name,
+        category: p.category,
+        quantity: p.quantity,
+        productionCost: p.productionCost,
+        price: p.price,
+        offered: p.offered,
+      })),
       scope: isUserPreset ? 'user' : 'admin',
       ownerProfileId: isUserPreset ? profileId : null,
     });
@@ -1105,7 +1327,7 @@ export const useSimulationStore = create<SimulationState>((set, get) => ({
         });
         const updated = { ...h, levers };
         if (h.budgetMode === 'levier' || h.budgetMode === 'libre' || h.budgetMode === 'v3-levier') {
-          updated.totalBudget = levers.reduce((s, l) => s + l.budget, 0);
+          updated.totalBudget = levers.filter(l => l.includedInHypothesis !== false).reduce((s, l) => s + l.budget, 0);
         }
         return updated;
       });
@@ -1154,7 +1376,7 @@ export const useSimulationStore = create<SimulationState>((set, get) => ({
         const updated = { ...h, levers };
         // V2 couverture ou V2 budget libre: budget recalculé → mettre à jour totalBudget
         if ((version === 'v2' && (h.objectiveMode === 'couverture' || (h.objectiveMode === 'budget' && h.budgetMode === 'libre'))) || h.budgetMode === 'libre') {
-          updated.totalBudget = levers.reduce((s, l) => s + l.budget, 0);
+          updated.totalBudget = levers.filter(l => l.includedInHypothesis !== false).reduce((s, l) => s + l.budget, 0);
         }
         return updated;
       });
@@ -1198,7 +1420,7 @@ export const useSimulationStore = create<SimulationState>((set, get) => ({
         const updated = { ...h, levers };
         // V2 couverture ou V2 budget libre: budget recalculé → mettre à jour totalBudget
         if ((version === 'v2' && (h.objectiveMode === 'couverture' || (h.objectiveMode === 'budget' && h.budgetMode === 'libre'))) || h.budgetMode === 'libre') {
-          updated.totalBudget = levers.reduce((s, l) => s + l.budget, 0);
+          updated.totalBudget = levers.filter(l => l.includedInHypothesis !== false).reduce((s, l) => s + l.budget, 0);
         }
         return updated;
       });
@@ -1224,15 +1446,20 @@ export const useSimulationStore = create<SimulationState>((set, get) => ({
         if (h.id !== hypothesisId) return h;
         if (h.levers.length === 0) return h;
         const avgPop = getZoneAvgPop(state.stores, h.zoneId);
-        const maxes = h.levers.map(l => l.maxCoverage);
+        const inc = (l: Lever) => l.includedInHypothesis !== false;
+        const includedIndices = h.levers.map((l, i) => (inc(l) ? i : -1)).filter(i => i >= 0);
+        if (includedIndices.length === 0) return h;
+        const maxes = includedIndices.map(i => h.levers[i]!.maxCoverage);
         const coverages = distributeCoverageWaterfill(targetAvg, maxes);
         const levers = h.levers.map((l, i) => {
-          const coverage = coverages[i];
+          const pos = includedIndices.indexOf(i);
+          if (pos < 0) return { ...l };
+          const coverage = coverages[pos]!;
           const budget = calcBudgetFromCoverage(coverage, l.cpm, l.repetition, avgPop, sc);
           const impressions = calcImpressions(budget, l.cpm);
           return { ...l, coverage, budget, impressions };
         });
-        const totalBudget = levers.reduce((s, l) => s + l.budget, 0);
+        const totalBudget = levers.filter(inc).reduce((s, l) => s + l.budget, 0);
         return { ...h, levers, totalBudget };
       });
 
@@ -1256,7 +1483,10 @@ export const useSimulationStore = create<SimulationState>((set, get) => ({
     const state = get();
     const h = state.simulation?.hypotheses.find(x => x.id === hypothesisId);
     if (!h || h.levers.length === 0) return;
-    const maxes = h.levers.map(l => l.maxCoverage);
+    const inc = (l: Lever) => l.includedInHypothesis !== false;
+    const active = h.levers.filter(inc);
+    if (active.length === 0) return;
+    const maxes = active.map(l => l.maxCoverage);
     const targetAvg = avgForDedupCoverage(targetDedup, maxes);
     get().setHypothesisTargetCoverage(hypothesisId, targetAvg);
   },
@@ -1283,6 +1513,52 @@ export const useSimulationStore = create<SimulationState>((set, get) => ({
     api.deletePreset(id).catch(console.error);
   },
 
+  updatePreset: (id, updates, ctx) => {
+    const preset = get().presets.find(p => p.id === id);
+    if (!preset) return;
+    const scope = preset.scope ?? 'admin';
+    if (ctx) {
+      if (!ctx.isAdmin) {
+        if (scope === 'admin') return;
+        if (preset.ownerProfileId !== ctx.profileId) return;
+      }
+    }
+    const body: { name?: string; description?: string } = {};
+    if (updates.name !== undefined) {
+      const t = updates.name.trim();
+      if (!t) return;
+      body.name = t;
+    }
+    if (updates.description !== undefined) {
+      body.description = updates.description;
+    }
+    if (Object.keys(body).length === 0) return;
+    set(state => {
+      const nextPresets = state.presets.map(p => {
+        if (p.id !== id) return p;
+        return {
+          ...p,
+          ...(body.name !== undefined ? { name: body.name } : {}),
+          ...(body.description !== undefined ? { description: body.description } : {}),
+        };
+      });
+      let nextApplied = state.appliedPresets;
+      if (body.name !== undefined) {
+        const ap = { ...state.appliedPresets };
+        let changed = false;
+        for (const [hid, info] of Object.entries(ap)) {
+          if (info.id === id) {
+            ap[hid] = { ...info, name: body.name! };
+            changed = true;
+          }
+        }
+        if (changed) nextApplied = ap;
+      }
+      return { presets: nextPresets, appliedPresets: nextApplied };
+    });
+    api.patchPreset(id, body).catch(console.error);
+  },
+
   reorderAdminPresets: (ids: string[]) => {
     set(state => {
       const adminIds = new Set(ids);
@@ -1297,33 +1573,53 @@ export const useSimulationStore = create<SimulationState>((set, get) => ({
   toggleAdmin: () => set(state => ({ showAdmin: !state.showAdmin })),
 
   // ── Prestations ──────────────────────────────────────────────
-  addPrestation: (p) => {
+  addPrestation: (hypothesisId, p) => {
     set(state => {
       if (!state.simulation) return state;
       const prestation: Prestation = { ...p, id: uid() };
-      const prestations = [...(state.simulation.prestations ?? []), prestation];
-      api.postPrestation(state.simulation.id, prestation).catch(console.error);
-      return { simulation: { ...state.simulation, prestations } };
-    });
-  },
-
-  updatePrestation: (id, updates) => {
-    set(state => {
-      if (!state.simulation) return state;
-      const prestations = (state.simulation.prestations ?? []).map(p =>
-        p.id === id ? { ...p, ...updates } : p,
+      const hypotheses = state.simulation.hypotheses.map(h =>
+        h.id === hypothesisId
+          ? { ...h, prestations: [...(h.prestations ?? []), prestation] }
+          : h,
       );
-      api.putPrestation(state.simulation.id, id, updates).catch(console.error);
-      return { simulation: { ...state.simulation, prestations } };
+      api.postPrestation(hypothesisId, prestation).catch(console.error);
+      return { simulation: { ...state.simulation, hypotheses } };
     });
   },
 
-  removePrestation: (id) => {
+  updatePrestation: (hypothesisId, id, updates) => {
     set(state => {
       if (!state.simulation) return state;
-      const prestations = (state.simulation.prestations ?? []).filter(p => p.id !== id);
-      api.deletePrestation(state.simulation.id, id).catch(console.error);
-      return { simulation: { ...state.simulation, prestations } };
+      const lock = state.appliedPresets[hypothesisId];
+      const h = state.simulation.hypotheses.find(x => x.id === hypothesisId);
+      const target = h?.prestations?.find(p => p.id === id);
+      if (lock && target?.fromPreset) return state;
+      const hypotheses = state.simulation.hypotheses.map(h0 => {
+        if (h0.id !== hypothesisId) return h0;
+        const prestations = (h0.prestations ?? []).map(p =>
+          p.id === id ? { ...p, ...updates } : p,
+        );
+        return { ...h0, prestations };
+      });
+      api.putPrestation(hypothesisId, id, updates).catch(console.error);
+      return { simulation: { ...state.simulation, hypotheses } };
+    });
+  },
+
+  removePrestation: (hypothesisId, id) => {
+    set(state => {
+      if (!state.simulation) return state;
+      const lock = state.appliedPresets[hypothesisId];
+      const h = state.simulation.hypotheses.find(x => x.id === hypothesisId);
+      const p = h?.prestations?.find(x => x.id === id);
+      if (lock && p?.fromPreset) return state;
+      const hypotheses = state.simulation.hypotheses.map(h0 =>
+        h0.id === hypothesisId
+          ? { ...h0, prestations: (h0.prestations ?? []).filter(x => x.id !== id) }
+          : h0,
+      );
+      api.deletePrestation(hypothesisId, id).catch(console.error);
+      return { simulation: { ...state.simulation, hypotheses } };
     });
   },
 
@@ -1390,9 +1686,22 @@ export const useSimulationStore = create<SimulationState>((set, get) => ({
   importData: (json) => {
     try {
       const data = JSON.parse(json);
+      let importedSim = data.simulation as (Simulation & { prestations?: Prestation[] }) | undefined;
+      if (importedSim?.prestations?.length && importedSim.hypotheses?.length) {
+        const legacy = importedSim.prestations;
+        const { prestations: _drop, ...rest } = importedSim;
+        importedSim = {
+          ...rest,
+          hypotheses: importedSim.hypotheses.map((h, i) =>
+            i === 0
+              ? { ...h, prestations: [...(h.prestations ?? []), ...legacy] }
+              : { ...h, prestations: h.prestations ?? [] },
+          ),
+        };
+      }
       set(state => ({
-        ...(data.simulation !== undefined && { simulation: data.simulation }),
-        ...(data.simulation !== undefined && { activeHypothesisId: data.simulation?.hypotheses?.[0]?.id ?? null }),
+        ...(importedSim !== undefined && { simulation: importedSim }),
+        ...(importedSim !== undefined && { activeHypothesisId: importedSim?.hypotheses?.[0]?.id ?? null }),
         ...(data.presets && { presets: (data.presets as Preset[]).map(normalizePreset) }),
         ...(data.leverConfigs && {
           leverConfigs: Object.fromEntries(
@@ -1421,30 +1730,47 @@ export const useSimulationStore = create<SimulationState>((set, get) => ({
     const state = get();
     if (!state.simulation) return null;
     const h = state.simulation.hypotheses.find(h => h.id === id);
-    if (!h || h.levers.length === 0) return null;
+    const inc = (l: Lever) => l.includedInHypothesis !== false;
+    const activeLevers = h ? h.levers.filter(inc) : [];
+    if (!h || (activeLevers.length === 0 && !(h.prestations?.length))) return null;
 
     // Toujours utiliser la dépense RÉELLE (somme des budgets leviers) pour la
     // ventilation par magasin. En modes `automatique` / `pctTotal` / couverture,
     // h.totalBudget est l'objectif saisi ; la dépense réelle peut différer
     // (plafonnement maxCoverage, recalcul via avgPop au changement de zone…),
     // et c'est cette dépense qui doit être répartie sur les magasins.
-    const totalBudget = h.levers.reduce((s, l) => s + l.budget, 0);
+    const totalBudget = activeLevers.reduce((s, l) => s + l.budget, 0);
 
     // Couverture dédupliquée : 1 - ∏(1 - couv_i/100) — alignée sur le récap, répétition moyenne des leviers
-    const coverageDetail = h.levers.map(l => ({ name: l.type, coverage: l.coverage }));
-    const deduplicatedCoverage = h.levers.length > 0
-      ? Math.round((1 - h.levers.reduce((prod, l) => prod * (1 - l.coverage / 100), 1)) * 1000) / 10
+    const coverageDetail = activeLevers.map(l => ({ name: l.type, coverage: l.coverage }));
+    const deduplicatedCoverage = activeLevers.length > 0
+      ? Math.round((1 - activeLevers.reduce((prod, l) => prod * (1 - l.coverage / 100), 1)) * 1000) / 10
       : 0;
 
-    const avgRepetition = h.levers.length > 0
-      ? Math.round((h.levers.reduce((s, l) => s + l.repetition, 0) / h.levers.length) * 10) / 10
+    const avgRepetition = activeLevers.length > 0
+      ? Math.round((activeLevers.reduce((s, l) => s + l.repetition, 0) / activeLevers.length) * 10) / 10
       : 0;
 
     const distMode: StoreDistributionMode = h.storeDistributionMode ?? 'egal';
     const zoneId = h.zoneId ?? 'zone1';
     const minPerStoreFromLevers =
-      h.levers.length > 0 ? h.levers.reduce((s, l) => s + l.minBudgetPerStore, 0) : 0;
-    const parts = allocateStoreBudgets(totalBudget, state.stores, distMode, Math.round(minPerStoreFromLevers), zoneId);
+      activeLevers.length > 0 ? activeLevers.reduce((s, l) => s + l.minBudgetPerStore, 0) : 0;
+    // Objectif couverture + tranches de 50 € : plancher par mag. aligné au multiple de 50 supérieur
+    // (ex. 120 € de config → 150 €) pour cohérence avec `snapStoreBudgetsToFifty`.
+    const minForStoreAllocation =
+      h.objectiveMode === 'couverture' && minPerStoreFromLevers > 0
+        ? Math.ceil(minPerStoreFromLevers / BUDGET_STORE_STEP) * BUDGET_STORE_STEP
+        : minPerStoreFromLevers;
+    let parts = allocateStoreBudgets(
+      totalBudget,
+      state.stores,
+      distMode,
+      Math.round(minForStoreAllocation),
+      zoneId,
+    );
+    if (h.objectiveMode === 'couverture') {
+      parts = snapStoreBudgetsToFifty(parts, totalBudget, Math.round(minForStoreAllocation));
+    }
     const storeBudgets = state.stores.map((store, i) => ({
       id: store.id,
       name: store.name,
@@ -1457,27 +1783,31 @@ export const useSimulationStore = create<SimulationState>((set, get) => ({
 
     const sortedStores = [...storeBudgets].map(({ name, budget }) => ({ name, budget })).sort((a, b) => a.budget - b.budget);
 
-    const leverBreakdown = h.levers.map(l => {
+    const leverBreakdown = activeLevers.map(l => {
       const cfg = state.leverConfigs[l.type];
       const name = cfg?.family && cfg.family !== 'Legacy'
         ? `${cfg.family} - ${cfg.label || l.type}`
         : (cfg?.label || l.type);
       return {
+        id: l.id,
         name,
         budget: l.budget,
         impressions: calcImpressions(l.budget, l.cpm),
         color: cfg?.color || '#666',
+        coverage: l.coverage,
+        repetition: l.repetition,
+        cpm: l.cpm,
       };
     });
 
     // Marge : achat total = somme des (budget levier × purchaseCpm / cpm) + coûts de production prestas.
-    const realBudget = h.levers.reduce((s, l) => s + l.budget, 0);
-    const purchaseTotal = h.levers.reduce((sum, l) => {
+    const realBudget = activeLevers.reduce((s, l) => s + l.budget, 0);
+    const purchaseTotal = activeLevers.reduce((sum, l) => {
       if (!l.cpm || l.cpm <= 0) return sum;
       const ratio = (l.purchaseCpm ?? 0) / l.cpm;
       return sum + l.budget * ratio;
     }, 0);
-    const prestations = state.simulation.prestations ?? [];
+    const prestations = h.prestations ?? [];
     const prestationsSaleTotal = prestations.reduce((s, p) => s + (p.offered ? 0 : p.price * (p.quantity ?? 1)), 0);
     const prestationsCostTotal = prestations.reduce((s, p) => s + (p.offered ? 0 : (p.productionCost ?? 0) * (p.quantity ?? 1)), 0);
     const retrocommissionPercent = h.retrocommissionPercent ?? 0;
@@ -1488,7 +1818,7 @@ export const useSimulationStore = create<SimulationState>((set, get) => ({
 
     return {
       totalBudget,
-      leverCount: h.levers.length,
+      leverCount: activeLevers.length,
       minStore: sortedStores[0] || { name: '-', budget: 0 },
       maxStore: sortedStores[sortedStores.length - 1] || { name: '-', budget: 0 },
       storeBudgets,

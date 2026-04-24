@@ -2,6 +2,7 @@ import { useState } from 'react';
 import { Sparkles, UserPlus, LogIn, Shield, User, Trash2, X } from 'lucide-react';
 import { useProfileStore } from '../store/profileStore';
 import ThemeToggle from './ThemeToggle';
+import { blurOnEnter } from './NumInput';
 
 type Props = {
   /** Si true, l’utilisateur peut fermer sans changer (retour à l’app). */
@@ -115,6 +116,7 @@ export default function ProfileSelector({ allowDismiss, onDismiss }: Props) {
                   type="text"
                   value={pseudo}
                   onChange={e => setPseudo(e.target.value)}
+                  onKeyDown={blurOnEnter}
                   placeholder="Votre nom ou surnom"
                   className="w-full bg-navy-800/80 border border-navy-600/50 rounded-lg px-3 py-2.5 text-sm text-fg placeholder:text-fg/55 focus:outline-none focus:border-teal-400/50"
                   autoFocus

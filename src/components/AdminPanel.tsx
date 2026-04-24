@@ -1,12 +1,31 @@
 import { useState, useRef, useEffect, useMemo } from 'react';
-import { Settings, Plus, Trash2, X, Upload, Download, Sliders, MapPin, Gauge, ArrowLeftRight, Image, Lock, ChevronUp, ChevronDown, ChevronRight, History, RotateCcw, Eye, EyeOff, AlertTriangle, ArrowUpDown } from 'lucide-react';
+import { Settings, Plus, Trash2, X, Upload, Download, Sliders, MapPin, Gauge, ArrowLeftRight, Image, Lock, ChevronUp, ChevronDown, ChevronRight, History, RotateCcw, Eye, EyeOff, AlertTriangle, ArrowUpDown, User } from 'lucide-react';
 import { useSimulationStore } from '../store/simulationStore';
 import { useProfileStore, getActiveProfile } from '../store/profileStore';
+import { useUiPreferencesStore } from '../store/uiPreferencesStore';
 import { useHistoryStore } from '../store/historyStore';
 import { LEVER_TYPES, LEVER_CONFIGS } from '../data/defaults';
-import type { LeverType, AdminTab, Preset } from '../types';
-import { PlainNumericInput } from './NumInput';
+import type { LeverConfig, LeverType, AdminTab, Preset } from '../types';
+import { formatNum, formatImpressions } from '../utils/formatNum';
+import { PlainNumericInput, blurOnEnter } from './NumInput';
 import LeverLogoBadge from './LeverLogoBadge';
+
+/** Libellé mode objectif + budget, aligné sur Hypothesis / presets. */
+function adminPresetModeLabel(p: Preset): string {
+  if (p.objectiveMode === 'couverture') return 'Objectif couverture';
+  if (p.objectiveMode === 'budget' && p.budgetMode === 'libre') return 'Budget libre';
+  if (p.objectiveMode === 'budget' && p.budgetMode === 'automatique') return 'Budget · Automatique';
+  if (p.objectiveMode === 'budget' && p.budgetMode === 'pctTotal') return 'Budget · Manuel %';
+  if (p.objectiveMode === 'budget' && p.budgetMode === 'levier') return 'Budget · Manuel €';
+  if (p.objectiveMode === 'budget' && p.budgetMode === 'v3-levier') return 'Budget · V3 par levier';
+  return 'Mode personnalisé';
+}
+
+function leverLineLabel(type: string, cfg?: LeverConfig): string {
+  if (!cfg) return type;
+  if (cfg.family && cfg.family !== 'Legacy') return `${cfg.family} — ${cfg.label || type}`;
+  return cfg.label || type;
+}
 
 const TABS: { id: AdminTab; label: string; icon: typeof Settings }[] = [
   { id: 'params', label: 'Paramètres', icon: Settings },
@@ -21,6 +40,7 @@ function PresetRow({
   preset,
   leverConfigs,
   onRemove,
+  onRename,
   readOnly,
   onMoveUp,
   onMoveDown,
@@ -28,14 +48,43 @@ function PresetRow({
   isLast,
 }: {
   preset: Preset;
-  leverConfigs: Record<string, { color?: string }>;
+  leverConfigs: Record<string, LeverConfig>;
   onRemove: () => void;
+  onRename?: (name: string) => void;
   readOnly: boolean;
   onMoveUp?: () => void;
   onMoveDown?: () => void;
   isFirst?: boolean;
   isLast?: boolean;
 }) {
+  const [nameDraft, setNameDraft] = useState(preset.name);
+  useEffect(() => {
+    setNameDraft(preset.name);
+  }, [preset.id, preset.name]);
+
+  const commitName = () => {
+    if (!onRename) return;
+    const t = nameDraft.trim();
+    if (!t) {
+      setNameDraft(preset.name);
+      return;
+    }
+    if (t !== preset.name) onRename(t);
+  };
+
+  const { sumLeverBudget, sumImpressions, prestSale, prestas } = useMemo(() => {
+    const levers = preset.levers ?? [];
+    const p = preset.prestations ?? [];
+    return {
+      sumLeverBudget: levers.reduce((s, l) => s + (l.budget ?? 0), 0),
+      sumImpressions: levers.reduce((s, l) => s + (l.impressions ?? 0), 0),
+      prestSale: p.reduce((s, x) => s + (x.offered ? 0 : x.quantity * x.price), 0),
+      prestas: p,
+    };
+  }, [preset.levers, preset.prestations]);
+
+  const scope = preset.scope ?? 'admin';
+
   return (
     <div className="glass-card p-4 flex items-start gap-3">
       {onMoveUp !== undefined && (
@@ -56,12 +105,28 @@ function PresetRow({
           </button>
         </div>
       )}
-      <div className="flex-1">
-        <div className="flex items-center gap-2 flex-wrap">
-          <span className="text-sm font-semibold">{preset.name}</span>
+      <div className="flex-1 min-w-0 space-y-2.5">
+        <div className="flex items-center gap-2 flex-wrap min-w-0">
+          {onRename ? (
+            <input
+              type="text"
+              value={nameDraft}
+              onChange={e => setNameDraft(e.target.value)}
+              onBlur={commitName}
+              onKeyDown={blurOnEnter}
+              className="min-w-0 max-w-full flex-1 sm:max-w-md bg-navy-800/50 border border-navy-600/25 rounded-md px-2 py-0.5 text-sm font-semibold text-fg focus:outline-none focus:border-teal-400/40"
+            />
+          ) : (
+            <span className="text-sm font-semibold">{preset.name}</span>
+          )}
           <span className="text-[10px] px-1.5 py-0.5 rounded-full bg-navy-700 text-fg/72">
-            {preset.levers.length} leviers
+            {preset.levers.length} levier{preset.levers.length > 1 ? 's' : ''}
           </span>
+          {(preset.prestations?.length ?? 0) > 0 && (
+            <span className="text-[10px] px-1.5 py-0.5 rounded-full bg-navy-700/90 text-fg/72">
+              {preset.prestations?.length} prestation{(preset.prestations?.length ?? 0) > 1 ? 's' : ''}
+            </span>
+          )}
           {readOnly && (
             <span className="text-[10px] px-1.5 py-0.5 rounded-full bg-fg/8 text-fg/55 flex items-center gap-1">
               <Lock className="w-2.5 h-2.5" />
@@ -69,19 +134,147 @@ function PresetRow({
             </span>
           )}
         </div>
-        <p className="text-xs text-fg/60 mt-1">{preset.description}</p>
-        <div className="flex items-center gap-2 mt-2">
-          {preset.levers.map((l, i) => (
-            <div
-              key={i}
-              className="w-5 h-5 rounded-md flex items-center justify-center"
-              style={{ backgroundColor: `${leverConfigs[l.type]?.color}20` }}
-              title={l.type}
-            >
-              <div className="w-2 h-2 rounded-full" style={{ backgroundColor: leverConfigs[l.type]?.color }} />
-            </div>
-          ))}
+
+        <div className="flex flex-wrap items-center gap-1.5 text-[10px]">
+          <span
+            className="px-2 py-0.5 rounded-md bg-teal-400/12 text-teal-300/95 border border-teal-400/20"
+            title="Mode d’objectif et de budget enregistré dans le preset"
+          >
+            {adminPresetModeLabel(preset)}
+          </span>
+          {scope === 'user' ? (
+            <span className="px-2 py-0.5 rounded-md bg-fg/8 text-fg/70 border border-fg/10 inline-flex items-center gap-1">
+              <User className="w-3 h-3" />
+              Preset personnel
+            </span>
+          ) : (
+            <span className="px-2 py-0.5 rounded-md bg-fg/6 text-fg/62 border border-fg/10">Preset global</span>
+          )}
         </div>
+
+        <p className="text-[9px] font-mono text-fg/38 break-all" title="Identifiant technique">
+          {preset.id}
+        </p>
+
+        {preset.description?.trim() ? (
+          <p className="text-xs text-fg/60 leading-relaxed">{preset.description}</p>
+        ) : (
+          <p className="text-xs text-fg/40 italic">Aucune description</p>
+        )}
+
+        <dl className="grid grid-cols-2 sm:grid-cols-2 lg:grid-cols-3 gap-x-3 gap-y-1.5 text-[11px] border border-fg/8 rounded-lg px-3 py-2 bg-fg/[0.03]">
+          <div>
+            <dt className="text-fg/50 text-[10px] uppercase tracking-wide">Σ budget leviers</dt>
+            <dd className="text-fg/90 font-medium tabular-nums">{formatNum(Math.round(sumLeverBudget))} €</dd>
+          </div>
+          <div>
+            <dt className="text-fg/50 text-[10px] uppercase tracking-wide">Σ impressions</dt>
+            <dd className="text-fg/90 font-medium tabular-nums">{formatImpressions(sumImpressions)}</dd>
+          </div>
+          {prestas.length > 0 && (
+            <div>
+              <dt className="text-fg/50 text-[10px] uppercase tracking-wide">Prestations (vente)</dt>
+              <dd className="text-fg/90 font-medium tabular-nums">{formatNum(Math.round(prestSale))} €</dd>
+            </div>
+          )}
+          {typeof preset.totalBudget === 'number' && isFinite(preset.totalBudget) && (
+            <div>
+              <dt className="text-fg/50 text-[10px] uppercase tracking-wide">Budget total (preset)</dt>
+              <dd className="text-fg/90 font-medium tabular-nums">{formatNum(Math.round(preset.totalBudget))} €</dd>
+            </div>
+          )}
+          {typeof preset.maxBudgetPerStore === 'number' && isFinite(preset.maxBudgetPerStore) && (
+            <div>
+              <dt className="text-fg/50 text-[10px] uppercase tracking-wide">Max / magasin</dt>
+              <dd className="text-fg/90 font-medium tabular-nums">{formatNum(Math.round(preset.maxBudgetPerStore))} €</dd>
+            </div>
+          )}
+        </dl>
+
+        {preset.levers.length > 0 && (
+          <div className="overflow-x-auto rounded-lg border border-fg/8 -mx-0.5">
+            <table className="w-full min-w-[36rem] text-left text-[10px]">
+              <thead>
+                <tr className="border-b border-fg/10 text-fg/55">
+                  <th className="py-1.5 pl-2 pr-1 font-medium">Levier</th>
+                  <th className="py-1.5 px-1 font-medium whitespace-nowrap text-right">Budget</th>
+                  <th className="py-1.5 px-1 font-medium whitespace-nowrap text-right">% tot.</th>
+                  <th className="py-1.5 px-1 font-medium whitespace-nowrap text-right">Couv.</th>
+                  <th className="py-1.5 px-1 font-medium whitespace-nowrap text-right">Rép.</th>
+                  <th className="py-1.5 px-1 font-medium whitespace-nowrap text-right">CPM</th>
+                  <th className="py-1.5 px-1 font-medium whitespace-nowrap text-right">Achat</th>
+                  <th className="py-1.5 pr-2 pl-1 font-medium whitespace-nowrap text-right">Imp.</th>
+                </tr>
+              </thead>
+              <tbody className="text-fg/88">
+                {preset.levers.map((l, i) => {
+                  const cfg = leverConfigs[l.type];
+                  const color = cfg?.color ?? '#94a3b8';
+                  const pCpm = l.purchaseCpm ?? 0;
+                  return (
+                    <tr key={i} className="border-t border-fg/[0.06]">
+                      <td className="py-1.5 pl-2 pr-1 align-top">
+                        <div className="flex items-start gap-2 min-w-0">
+                          <span
+                            className="w-2 h-2 rounded-full shrink-0 mt-0.5"
+                            style={{ backgroundColor: color }}
+                          />
+                          <div className="min-w-0">
+                            <div className="font-medium text-fg/90 leading-tight break-words">
+                              {leverLineLabel(l.type, cfg)}
+                            </div>
+                            <div className="text-[9px] text-fg/42 font-mono break-all">{l.type}</div>
+                            {(l.startDate || l.endDate) && (
+                              <div className="text-[9px] text-fg/48 mt-0.5">
+                                {l.startDate || '…'} → {l.endDate || '…'}
+                              </div>
+                            )}
+                          </div>
+                        </div>
+                      </td>
+                      <td className="py-1.5 px-1 text-right tabular-nums whitespace-nowrap">{formatNum(Math.round(l.budget ?? 0))} €</td>
+                      <td className="py-1.5 px-1 text-right tabular-nums whitespace-nowrap">
+                        {(l.budgetPercent ?? 0) > 0 ? `${(l.budgetPercent ?? 0).toLocaleString('fr-FR', { maximumFractionDigits: 1 })} %` : '—'}
+                      </td>
+                      <td className="py-1.5 px-1 text-right tabular-nums whitespace-nowrap">
+                        {(l.coverage ?? 0).toLocaleString('fr-FR', { maximumFractionDigits: 1 })} %
+                      </td>
+                      <td className="py-1.5 px-1 text-right tabular-nums whitespace-nowrap">
+                        {(l.repetition ?? 0).toLocaleString('fr-FR', { maximumFractionDigits: 1 })}
+                      </td>
+                      <td className="py-1.5 px-1 text-right tabular-nums whitespace-nowrap">{(l.cpm ?? 0).toFixed(2)} €</td>
+                      <td className="py-1.5 px-1 text-right tabular-nums whitespace-nowrap">
+                        {pCpm > 0 ? `${pCpm.toFixed(2)} €` : '—'}
+                      </td>
+                      <td className="py-1.5 pr-2 pl-1 text-right tabular-nums whitespace-nowrap">{formatImpressions(l.impressions ?? 0)}</td>
+                    </tr>
+                  );
+                })}
+              </tbody>
+            </table>
+          </div>
+        )}
+
+        {prestas.length > 0 && (
+          <div>
+            <p className="text-[10px] uppercase tracking-wider text-fg/52 mb-1.5">Prestations (lignes)</p>
+            <ul className="space-y-1 text-[11px] text-fg/78">
+              {prestas.slice(0, 8).map((x, i) => (
+                <li key={i} className="flex flex-wrap items-baseline gap-x-2 gap-y-0 border-b border-fg/[0.05] pb-1 last:border-0 last:pb-0">
+                  <span className="text-fg/90 font-medium min-w-0 break-words">{x.name || '—'}</span>
+                  {x.category && <span className="text-fg/45">· {x.category}</span>}
+                  <span className="text-fg/55 tabular-nums">
+                    ×{x.quantity} @ {x.price.toFixed(2)} €
+                    {x.offered ? <span className="text-amber-400/90 ml-1">offert</span> : ` → ${formatNum(Math.round(x.quantity * x.price))} €`}
+                  </span>
+                </li>
+              ))}
+            </ul>
+            {prestas.length > 8 && (
+              <p className="text-[10px] text-fg/45 mt-1.5">+ {prestas.length - 8} autre(s) ligne(s)</p>
+            )}
+          </div>
+        )}
       </div>
       {!readOnly && (
         <button
@@ -103,12 +296,15 @@ export default function AdminPanel() {
   const isAdminUser = activeProfile?.isAdmin ?? true;
 
   const {
-    presets, removePreset, reorderAdminPresets, showAdmin, toggleAdmin,
+    presets, removePreset, updatePreset, reorderAdminPresets, showAdmin, toggleAdmin,
     leverConfigs, updateLeverConfig,
     stores, addStore, removeStore, updateStore, importStoresFromExcel,
     globalParams, updateGlobalParams,
     exportData, importData,
   } = useSimulationStore();
+
+  const alertFieldFlashesEnabled = useUiPreferencesStore(s => s.alertFieldFlashesEnabled);
+  const setAlertFieldFlashesEnabled = useUiPreferencesStore(s => s.setAlertFieldFlashesEnabled);
 
   const [tab, setTab] = useState<AdminTab>(() => (isAdminUser ? 'params' : 'presets'));
 
@@ -271,7 +467,7 @@ export default function AdminPanel() {
     <>
     <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/60 backdrop-blur-sm" onClick={toggleAdmin}>
       <div
-        className="bg-navy-900 border border-navy-600/50 rounded-2xl shadow-2xl w-full max-w-2xl h-[85vh] flex flex-col overflow-hidden animate-fade-in"
+        className="bg-navy-900 border border-navy-600/50 rounded-2xl shadow-2xl w-[clamp(42rem,80vw,84rem)] h-[85vh] flex flex-col overflow-hidden animate-fade-in"
         onClick={e => e.stopPropagation()}
       >
         {/* Header */}
@@ -335,6 +531,7 @@ export default function AdminPanel() {
                         preset={preset}
                         leverConfigs={leverConfigs}
                         readOnly={false}
+                        onRename={name => updatePreset(preset.id, { name }, removeCtx)}
                         onRemove={() => requestRemovePreset(preset)}
                         onMoveUp={() => moveAdminPreset(idx, -1)}
                         onMoveDown={() => moveAdminPreset(idx, 1)}
@@ -372,6 +569,7 @@ export default function AdminPanel() {
                         preset={preset}
                         leverConfigs={leverConfigs}
                         readOnly={false}
+                        onRename={name => updatePreset(preset.id, { name }, removeCtx)}
                         onRemove={() => requestRemovePreset(preset)}
                       />
                     ))
@@ -662,6 +860,7 @@ export default function AdminPanel() {
                               type="text"
                               value={store.name}
                               onChange={e => updateStore(store.id, { name: e.target.value })}
+                              onKeyDown={blurOnEnter}
                               className="w-full min-w-0 max-w-md bg-navy-800/50 border border-navy-600/25 rounded-md px-2 py-1 text-xs text-fg focus:outline-none focus:border-teal-400/40"
                             />
                           </div>
@@ -802,6 +1001,35 @@ export default function AdminPanel() {
                     className={inputClass}
                   />
                   <p className="text-[10px] text-fg/55 mt-1">Valeur maximale affichée sur le slider de répétition par levier.</p>
+                </div>
+              </div>
+
+              <h3 className="text-xs font-semibold uppercase tracking-wider text-fg/72 pt-2">Interface</h3>
+              <p className="text-[11px] text-fg/62">Options d’affichage dans l’écran de simulation (hypothèses).</p>
+              <div className="glass-card p-4">
+                <div className="flex items-center justify-between gap-3">
+                  <div>
+                    <div className="text-xs font-medium text-fg/92">Mise en avant des champs d’alerte</div>
+                    <div className="text-[10px] text-fg/55 mt-0.5 max-w-[36rem]">
+                      Pulse discret (ambre) sur le budget, les leviers ou le slider de couverture cible quand l’en-tête d’alerte
+                      d’une hypothèse indique un problème à corriger. Désactivé par défaut.
+                    </div>
+                  </div>
+                  <button
+                    type="button"
+                    role="switch"
+                    aria-checked={alertFieldFlashesEnabled}
+                    onClick={() => setAlertFieldFlashesEnabled(!alertFieldFlashesEnabled)}
+                    className={`relative w-11 h-6 shrink-0 rounded-full transition-colors ${
+                      alertFieldFlashesEnabled ? 'bg-teal-500' : 'bg-navy-600'
+                    }`}
+                  >
+                    <span
+                      className={`absolute top-1 left-1 w-4 h-4 rounded-full bg-white shadow transition-transform ${
+                        alertFieldFlashesEnabled ? 'translate-x-5' : ''
+                      }`}
+                    />
+                  </button>
                 </div>
               </div>
 

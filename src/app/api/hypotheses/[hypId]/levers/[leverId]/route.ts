@@ -8,24 +8,25 @@ export async function PUT(
   const { hypId, leverId } = await params;
   const {
     type, cpm, purchaseCpm, minBudgetPerStore, budget, budgetPercent,
-    repetition, coverage, maxCoverage, impressions, startDate, endDate, collapsed,
+    repetition, coverage, maxCoverage, impressions, startDate, endDate, collapsed, includedInHypothesis,
   } = await request.json();
 
   await sql`
     UPDATE levers SET
-      type                 = COALESCE(${type ?? null}, type),
-      cpm                  = COALESCE(${cpm ?? null}, cpm),
-      purchase_cpm         = COALESCE(${purchaseCpm ?? null}, purchase_cpm),
-      min_budget_per_store = COALESCE(${minBudgetPerStore ?? null}, min_budget_per_store),
-      budget               = COALESCE(${budget ?? null}, budget),
-      budget_percent       = COALESCE(${budgetPercent ?? null}, budget_percent),
-      repetition           = COALESCE(${repetition ?? null}, repetition),
-      coverage             = COALESCE(${coverage ?? null}, coverage),
-      max_coverage         = COALESCE(${maxCoverage ?? null}, max_coverage),
-      impressions          = COALESCE(${impressions ?? null}, impressions),
-      start_date           = COALESCE(${startDate ?? null}, start_date),
-      end_date             = COALESCE(${endDate ?? null}, end_date),
-      collapsed            = COALESCE(${collapsed !== undefined ? (collapsed ? 1 : 0) : null}, collapsed)
+      type                   = COALESCE(${type ?? null}, type),
+      cpm                    = COALESCE(${cpm ?? null}, cpm),
+      purchase_cpm           = COALESCE(${purchaseCpm ?? null}, purchase_cpm),
+      min_budget_per_store   = COALESCE(${minBudgetPerStore ?? null}, min_budget_per_store),
+      budget                 = COALESCE(${budget ?? null}, budget),
+      budget_percent         = COALESCE(${budgetPercent ?? null}, budget_percent),
+      repetition             = COALESCE(${repetition ?? null}, repetition),
+      coverage               = COALESCE(${coverage ?? null}, coverage),
+      max_coverage           = COALESCE(${maxCoverage ?? null}, max_coverage),
+      impressions            = COALESCE(${impressions ?? null}, impressions),
+      start_date             = COALESCE(${startDate ?? null}, start_date),
+      end_date               = COALESCE(${endDate ?? null}, end_date),
+      collapsed              = COALESCE(${collapsed !== undefined ? (collapsed ? 1 : 0) : null}, collapsed),
+      included_in_hypothesis = COALESCE(${includedInHypothesis !== undefined ? (includedInHypothesis ? 1 : 0) : null}, included_in_hypothesis)
     WHERE id = ${leverId} AND hypothesis_id = ${hypId}
   `;
   return NextResponse.json({ id: leverId });

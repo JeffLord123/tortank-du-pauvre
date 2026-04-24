@@ -1,5 +1,5 @@
-import { useState, useRef } from 'react';
-import { ChevronDown, Trash2, CalendarDays, Lock } from 'lucide-react';
+import { useState, useRef, useEffect } from 'react';
+import { ChevronDown, Trash2, CalendarDays, Lock, Eye, EyeOff } from 'lucide-react';
 import { useSimulationStore } from '../store/simulationStore';
 import { useVersionStore } from '../store/versionStore';
 import { LEVER_CONFIGS, getZoneAvgPop } from '../data/defaults';
@@ -9,14 +9,21 @@ import NumInput, { PlainNumericInput } from './NumInput';
 import FrenchDateInput from './FrenchDateInput';
 import LeverLogoBadge from './LeverLogoBadge';
 import SliderWithTooltip from './SliderWithTooltip';
+import AlertFieldFlash from './AlertFieldFlash';
+
+export type LeverFlashRegion = 'budget' | 'coverage' | 'repetition' | 'card' | null;
 
 interface Props {
   lever: Lever;
   hypothesis: Hypothesis;
   index: number;
+  /** Alerte « premier plan » ciblant ce levier : quelle rangée (slider) souligner. */
+  alertFlashRegion?: LeverFlashRegion;
+  /** Clé pour relancer l’animation (message + repli de la carte). */
+  alertFlashKey?: string;
 }
 
-export default function LeverCard({ lever, hypothesis, index }: Props) {
+export default function LeverCard({ lever, hypothesis, index, alertFlashRegion = null, alertFlashKey = '' }: Props) {
   const { removeLever, toggleLeverCollapse, updateLever, updateLeverBudget, updateLeverCoverage, updateLeverRepetition, globalParams, stores, leverConfigs } = useSimulationStore();
   const config = leverConfigs[lever.type] ?? LEVER_CONFIGS[lever.type];
 
@@ -49,17 +56,46 @@ export default function LeverCard({ lever, hypothesis, index }: Props) {
   const maxPctBeforeGlobal100 = Math.max(0, Math.min(100, 100 - othersBudgetPctSum));
   const pctBudgetSumOver100 = isPctEditable && totalBudgetPctSum > 100;
   const pctLeverPastGlobal100Cap = isPctEditable && lever.budgetPercent > maxPctBeforeGlobal100;
+  const excludedFromScenario = lever.includedInHypothesis === false;
+  const r = alertFlashRegion;
+  const k = alertFlashKey;
+  const isRowTarget = r === 'budget' || r === 'coverage' || r === 'repetition';
+  const flashEntireCard = r === 'card';
+  const headFlash = !!r && isRowTarget && lever.collapsed;
+  const flashBudgetBlock = r === 'budget' && !lever.collapsed;
+  const flashCoverageBlock = r === 'coverage' && !lever.collapsed;
+  const flashRepetitionBlock = r === 'repetition' && !lever.collapsed;
+  const keySeg = `${k}-h${lever.collapsed ? 1 : 0}`;
+
+  const rootRef = useRef<HTMLDivElement>(null);
+  useEffect(() => {
+    const el = rootRef.current;
+    if (!el) return;
+    if (!flashEntireCard) {
+      el.classList.remove('animate-alert-flash');
+      return;
+    }
+    el.classList.remove('animate-alert-flash');
+    void el.getBoundingClientRect();
+    el.classList.add('animate-alert-flash');
+  }, [flashEntireCard, k]);
 
   return (
     <div
-      className="glass-card overflow-hidden animate-fade-in"
+      ref={rootRef}
+      className={`glass-card overflow-hidden animate-fade-in ${excludedFromScenario ? 'opacity-[0.58]' : ''}`}
       style={{ animationDelay: `${index * 50}ms`, borderLeftColor: config?.color, borderLeftWidth: '3px' }}
     >
       {/* Header */}
-      <div
-        className="flex items-center gap-2.5 px-4 py-2 cursor-pointer hover:bg-fg/[0.06] transition-colors"
-        onClick={() => toggleLeverCollapse(hypothesis.id, lever.id)}
+      <AlertFieldFlash
+        active={headFlash}
+        animKey={keySeg}
+        className="-mx-0.5 px-0.5 rounded-lg"
       >
+        <div
+          className="flex items-center gap-2.5 px-4 py-2 cursor-pointer hover:bg-fg/[0.06] transition-colors"
+          onClick={() => toggleLeverCollapse(hypothesis.id, lever.id)}
+        >
         <LeverLogoBadge cfg={config} />
 
         <span className="font-semibold text-sm shrink-0">
@@ -68,13 +104,18 @@ export default function LeverCard({ lever, hypothesis, index }: Props) {
             : (config?.label || lever.type)}
         </span>
 
-        <div className="flex-1 min-w-0 flex items-center gap-2 flex-wrap">
-          <span className="inline-flex items-center gap-1.5 text-[11px] font-mono font-semibold bg-navy-700/80 text-fg/80 px-2 py-0.5 rounded-full border border-fg/10 shrink-0">
-            <span className="text-[10px] font-sans font-medium text-fg/62 normal-case tracking-normal">Budget levier</span>
-            <span>{formatNum(lever.budget)}€</span>
+        <div className="flex-1 min-w-0 flex items-center gap-1.5 flex-wrap content-start">
+          <span
+            className="inline-flex items-center text-[11px] font-mono font-semibold bg-navy-700/80 text-fg/80 px-2 py-0.5 rounded-full border border-fg/10 shrink-0 tabular-nums"
+            title="Budget (€) · couverture (%) · répétition (×) — valeurs actuelles du levier sur la zone."
+          >
+            {formatNum(lever.budget)}€ / {Number(lever.coverage).toFixed(1)}% / {Number(lever.repetition).toFixed(1)}×
           </span>
-          <span className="inline-flex items-center text-[10px] font-mono font-medium bg-navy-700/60 text-fg/75 px-1.5 py-0.5 rounded-full border border-fg/15 shrink-0">
-            CPM {lever.cpm.toFixed(2)}€
+          <span
+            className="inline-flex items-center text-[10px] font-mono font-medium bg-navy-700/60 text-fg/75 px-1.5 py-0.5 rounded-full border border-fg/15 shrink-0 tabular-nums"
+            title="CPM — coût pour mille impressions (€), avant marge."
+          >
+            {lever.cpm.toFixed(2)} €
           </span>
           {(() => {
             const purchase = lever.purchaseCpm ?? 0;
@@ -82,24 +123,44 @@ export default function LeverCard({ lever, hypothesis, index }: Props) {
             const m = ((lever.cpm - purchase) / lever.cpm) * 100;
             const cls = m >= 40 ? 'text-teal-400' : m >= 35 ? 'text-amber-400' : 'text-coral-400';
             return (
-              <span className={`inline-flex items-center text-[10px] font-mono font-medium bg-navy-700/60 px-1.5 py-0.5 rounded-full border border-fg/15 shrink-0 ${cls}`}>
-                Marge {m.toFixed(1)}%
+              <span
+                className={`inline-flex items-center text-[10px] font-mono font-medium bg-navy-700/60 px-1.5 py-0.5 rounded-full border border-fg/15 shrink-0 tabular-nums ${cls}`}
+                title="Marge d’achat — (CPM affiché − CPM d’achat) / CPM, en %."
+              >
+                {m.toFixed(1)}%
               </span>
             );
           })()}
-          <span className="inline-flex items-center text-[11px] font-medium bg-navy-700/60 text-fg/75 px-2 py-0.5 rounded-full border border-fg/15 shrink-0">
-            {lever.coverage}% couv.
-          </span>
-          <span className="inline-flex items-center text-[11px] font-medium bg-navy-700/60 text-fg/75 px-2 py-0.5 rounded-full border border-fg/15 shrink-0">
-            {lever.repetition}× rép.
-          </span>
-          <span className="inline-flex items-center text-[11px] font-medium bg-navy-700/60 text-fg/75 px-2 py-0.5 rounded-full border border-fg/15 shrink-0">
-            Min/mag {formatNum(lever.minBudgetPerStore)} €
+          <span
+            className="inline-flex items-center text-[11px] font-mono font-medium bg-navy-700/60 text-fg/75 px-2 py-0.5 rounded-full border border-fg/15 shrink-0 tabular-nums"
+            title="Budget plancher alloué par magasin sur ce levier (€)."
+          >
+            {formatNum(lever.minBudgetPerStore)} €
           </span>
         </div>
 
         <div className="flex items-center gap-2">
           <button
+            type="button"
+            onClick={e => {
+              e.stopPropagation();
+              updateLever(hypothesis.id, lever.id, { includedInHypothesis: excludedFromScenario });
+            }}
+            className={`p-1.5 rounded-md transition-colors ${
+              excludedFromScenario
+                ? 'text-amber-400/95 bg-amber-400/15 hover:bg-amber-400/25'
+                : 'text-fg/45 hover:text-fg/78 hover:bg-fg/10'
+            }`}
+            title={
+              excludedFromScenario
+                ? 'Réintégrer dans le scénario (récap, totaux, comparaison)'
+                : 'Exclure temporairement du scénario (récap et totaux)'
+            }
+          >
+            {excludedFromScenario ? <EyeOff className="w-3.5 h-3.5" /> : <Eye className="w-3.5 h-3.5" />}
+          </button>
+          <button
+            type="button"
             onClick={e => { e.stopPropagation(); removeLever(hypothesis.id, lever.id); }}
             className="p-1.5 rounded-md text-red-500 hover:text-red-400 hover:bg-red-500/10 transition-colors"
             title="Supprimer le levier"
@@ -112,7 +173,8 @@ export default function LeverCard({ lever, hypothesis, index }: Props) {
             }`}
           />
         </div>
-      </div>
+        </div>
+      </AlertFieldFlash>
 
       {/* Content */}
       <div className={`collapse-transition ${lever.collapsed ? '' : 'open'}`}>
@@ -147,6 +209,11 @@ export default function LeverCard({ lever, hypothesis, index }: Props) {
             </div>
 
             {/* Budget */}
+            <AlertFieldFlash
+              active={flashBudgetBlock}
+              animKey={`${k}-bud-${keySeg}`}
+              className="-mx-0.5 px-0.5 rounded-lg"
+            >
             <div>
               <div className="flex items-center justify-between mb-1">
                 <label className="text-[10px] uppercase tracking-wider text-amber-400">
@@ -274,8 +341,14 @@ export default function LeverCard({ lever, hypothesis, index }: Props) {
                 </div>
               )}
             </div>
+            </AlertFieldFlash>
 
             {/* Coverage */}
+            <AlertFieldFlash
+              active={flashCoverageBlock}
+              animKey={`${k}-cov-${keySeg}`}
+              className="-mx-0.5 px-0.5 rounded-lg"
+            >
             <div>
               <div className="flex items-center justify-between mb-1">
                 <label className="text-[10px] uppercase tracking-wider text-blue-400">
@@ -333,8 +406,14 @@ export default function LeverCard({ lever, hypothesis, index }: Props) {
                 </div>
               </div>
             </div>
+            </AlertFieldFlash>
 
             {/* Repetition */}
+            <AlertFieldFlash
+              active={flashRepetitionBlock}
+              animKey={`${k}-rep-${keySeg}`}
+              className="-mx-0.5 px-0.5 rounded-lg"
+            >
             <div>
               <div className="flex items-center justify-between mb-1">
                 <label className="text-[10px] uppercase tracking-wider text-purple-400">
@@ -391,6 +470,7 @@ export default function LeverCard({ lever, hypothesis, index }: Props) {
                 </div>
               )}
             </div>
+            </AlertFieldFlash>
 
             {/* Impressions readout */}
             <div className="flex items-center justify-between py-2 px-3 rounded-lg bg-navy-800/30 border border-navy-600/10">

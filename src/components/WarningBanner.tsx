@@ -1,11 +1,9 @@
 import { AlertTriangle, CheckCircle, Info } from 'lucide-react';
-import type { Warning } from '../store/simulationStore';
+import { getPrimaryWarning, type Warning } from '../store/simulationStore';
 
 interface Props {
   warnings: Warning[];
 }
-
-const KIND_ORDER = { error: 0, warning: 1, info: 2 };
 
 export default function WarningBanner({ warnings }: Props) {
   if (warnings.length === 0) {
@@ -17,8 +15,10 @@ export default function WarningBanner({ warnings }: Props) {
     );
   }
 
-  const sorted = [...warnings].sort((a, b) => KIND_ORDER[a.kind] - KIND_ORDER[b.kind]);
-  const first = sorted[0];
+  const first = getPrimaryWarning(warnings);
+  if (!first) {
+    return null;
+  }
 
   const styles = {
     error:   'bg-coral-500/10 border border-coral-500/20 text-coral-400',
@@ -34,8 +34,8 @@ export default function WarningBanner({ warnings }: Props) {
         <Info className="w-4 h-4 mt-0.5 shrink-0" />
       )}
       <span className="flex-1">{first.message}</span>
-      {sorted.length > 1 && (
-        <span className="shrink-0 text-[11px] opacity-60">+{sorted.length - 1}</span>
+      {warnings.length > 1 && (
+        <span className="shrink-0 text-[11px] opacity-60">+{warnings.length - 1}</span>
       )}
     </div>
   );

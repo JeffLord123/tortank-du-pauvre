@@ -4,6 +4,7 @@ import { useSimulationStore } from '../store/simulationStore';
 import { useProfileStore } from '../store/profileStore';
 import ThemeToggle from './ThemeToggle';
 import FrenchDateInput from './FrenchDateInput';
+import { blurOnEnter } from './NumInput';
 
 const CPM_OPTIONS: { value: string; label: string }[] = [
   { value: 'fixe', label: 'CPM fixe' },
@@ -65,12 +66,15 @@ export default function SimulationSetup() {
   const [startDate, setStartDate] = useState('');
   const [endDate, setEndDate] = useState('');
   const [cpmId, setCpmId] = useState('');
+  const [productTourFirstTime, setProductTourFirstTime] = useState(false);
 
   const canCreate = name.trim() && startDate && endDate && endDate >= startDate;
 
   const handleCreate = () => {
     if (canCreate) {
-      createSimulation(name.trim(), startDate, endDate, cpmId);
+      createSimulation(name.trim(), startDate, endDate, cpmId, {
+        productTourFirstTime,
+      });
     }
   };
 
@@ -115,6 +119,7 @@ export default function SimulationSetup() {
               type="text"
               value={name}
               onChange={e => setName(e.target.value)}
+              onKeyDown={blurOnEnter}
               placeholder="Ex: Campagne Printemps 2026"
               className="w-full bg-navy-800/80 border border-navy-600/50 rounded-lg px-4 py-3 text-fg placeholder:text-fg/65 focus:outline-none focus:border-teal-400/50 focus:ring-1 focus:ring-teal-400/20 transition-all"
               autoFocus
@@ -162,6 +167,21 @@ export default function SimulationSetup() {
             </label>
             <CpmDropdown value={cpmId} onChange={setCpmId} />
           </div>
+
+          <label className="flex items-start gap-3 cursor-pointer group rounded-lg border border-fg/10 bg-navy-900/30 px-3 py-3 hover:border-teal-400/25 transition-colors">
+            <input
+              type="checkbox"
+              checked={productTourFirstTime}
+              onChange={e => setProductTourFirstTime(e.target.checked)}
+              className="accent-teal-400 w-4 h-4 mt-0.5 shrink-0"
+            />
+            <span className="text-sm text-fg/85 leading-snug">
+              <span className="font-medium text-fg">Product tour la première fois</span>
+              <span className="block text-xs text-fg/60 mt-1">
+                Après la création, une visite guidée (10 étapes) présente les principales fonctions. Une seule fois par profil.
+              </span>
+            </span>
+          </label>
 
           {/* Submit */}
           <button

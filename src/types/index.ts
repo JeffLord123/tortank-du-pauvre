@@ -24,6 +24,20 @@ export interface Lever {
   maxCoverage: number;
   impressions: number;
   collapsed: boolean;
+  /**
+   * Si `false`, le levier reste dans la liste mais est exclu du récap, des totaux
+   * et des agrégats (couverture dédup., ventilation magasins, etc.). `undefined` = inclus.
+   */
+  includedInHypothesis?: boolean;
+}
+
+/** Levier pris en compte dans les calculs d’hypothèse (récap, totaux, comparaisons). */
+export function isLeverIncludedInHypothesis(l: Lever): boolean {
+  return l.includedInHypothesis !== false;
+}
+
+export function leversIncludedInHypothesis(levers: Lever[]): Lever[] {
+  return levers.filter(isLeverIncludedInHypothesis);
 }
 
 export interface Hypothesis {
@@ -35,6 +49,8 @@ export interface Hypothesis {
   totalBudget: number;
   budgetsByMode: Partial<Record<BudgetMode, number>>;
   levers: Lever[];
+  /** Prestations additionnelles propres à cette hypothèse. */
+  prestations?: Prestation[];
   collapsed: boolean;
   zoneId: ZoneId;
   /** Rétrocommission appliquée sur le budget total (en %). */
@@ -52,6 +68,8 @@ export interface Prestation {
   /** Unit price in €. Total billed = quantity * price unless offered. */
   price: number;
   offered: boolean;
+  /** Ligne issue d’un preset appliqué (non supprimable tant que le verrou est actif). */
+  fromPreset?: boolean;
 }
 
 export interface Simulation {
@@ -61,7 +79,6 @@ export interface Simulation {
   endDate: string;
   cpmId: string;
   hypotheses: Hypothesis[];
-  prestations?: Prestation[];
 }
 
 /** Presets globaux (admin) vs presets personnels rattachés à un profil. */
@@ -78,6 +95,8 @@ export interface Preset {
   /** Budget max par point de vente associé au preset. */
   maxBudgetPerStore?: number;
   levers: (Omit<Lever, 'id' | 'collapsed' | 'purchaseCpm'> & { purchaseCpm?: number })[];
+  /** Prestations enregistrées dans le preset (appliquées sur l’hypothèse avec fromPreset: true). */
+  prestations?: Omit<Prestation, 'id' | 'fromPreset'>[];
   /** Défaut `admin` si absent (rétrocompat). */
   scope?: PresetScope;
   /** Si `scope === 'user'`, identifiant du profil créateur. */

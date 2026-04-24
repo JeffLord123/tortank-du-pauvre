@@ -1,6 +1,4 @@
-'use client';
-
-import { useEffect, useRef } from 'react';
+import { useEffect, useRef, useState } from 'react';
 import { useSimulationStore } from './store/simulationStore';
 import { useProfileStore } from './store/profileStore';
 import SimulationSetup from './components/SimulationSetup';
@@ -11,8 +9,10 @@ import ComparisonView from './components/ComparisonView';
 import AdminPanel from './components/AdminPanel';
 import ProfileSelector from './components/ProfileSelector';
 import Toaster from './components/Toaster';
+import ProductTour from './components/ProductTour';
 import { useHistoryRecorder } from './hooks/useHistoryRecorder';
 import { useUndoRedoShortcuts } from './hooks/useUndoRedoShortcuts';
+import { consumePendingProductTour } from './productTour/storage';
 
 function App() {
   const simulation = useSimulationStore(s => s.simulation);
@@ -28,6 +28,9 @@ function App() {
 
   const showProfileScreen = !activeProfileId || profilePickerOpen;
   const lastLoadedProfile = useRef<string | null>(null);
+  const [productTourOpen, setProductTourOpen] = useState(false);
+  /** Si true, fermer la visite enregistre « déjà vu » (option à la création). Manuel : false. */
+  const [productTourFromOnboarding, setProductTourFromOnboarding] = useState(false);
 
   useEffect(() => {
     if (showProfileScreen || !activeProfileId) return;
@@ -35,6 +38,14 @@ function App() {
     lastLoadedProfile.current = activeProfileId;
     void initFromAPI(activeProfileId);
   }, [activeProfileId, showProfileScreen, initFromAPI]);
+
+  useEffect(() => {
+    if (!simulation || !activeProfileId) return;
+    if (consumePendingProductTour(activeProfileId)) {
+      setProductTourFromOnboarding(true);
+      setProductTourOpen(true);
+    }
+  }, [simulation?.id, activeProfileId]);
 
   if (showProfileScreen) {
     return (
@@ -51,7 +62,12 @@ function App() {
 
   return (
     <div className="min-h-screen flex flex-col">
-      <SimulationHeader />
+      <SimulationHeader
+        onOpenProductTour={() => {
+          setProductTourFromOnboarding(false);
+          setProductTourOpen(true);
+        }}
+      />
 
       <div className="flex-1 flex">
         {/* Main content: hypotheses */}
@@ -62,9 +78,12 @@ function App() {
         </main>
 
         {/* Right sidebar: summary + comparison */}
-        <aside className={`overflow-y-auto p-4 pl-2 transition-all duration-300 ${
-          showComparison ? 'w-[45%]' : 'w-[35%]'
-        }`}>
+        <aside
+          data-tour="tour-summary"
+          className={`overflow-y-auto p-4 pl-2 transition-all duration-300 ${
+            showComparison ? 'w-[45%]' : 'w-[35%]'
+          }`}
+        >
           {showComparison ? (
             <ComparisonView />
           ) : (
@@ -78,6 +97,16 @@ function App() {
 
       {/* Toast notifications (top-right) */}
       <Toaster />
+
+      <ProductTour
+        open={productTourOpen}
+        onClose={() => {
+          setProductTourOpen(false);
+          setProductTourFromOnboarding(false);
+        }}
+        profileId={activeProfileId}
+        markCompleteOnFinish={productTourFromOnboarding}
+      />
     </div>
   );
 }

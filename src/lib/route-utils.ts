@@ -44,22 +44,18 @@ export async function getFullSimulation(id: string): Promise<Record<string, any>
     WHERE h.simulation_id = ${id}
     ORDER BY l.sort_order
   `;
-  const prestations = await sql`SELECT * FROM prestations WHERE simulation_id = ${id} ORDER BY sort_order`;
+  const allPrestations = await sql`
+    SELECT p.* FROM prestations p
+    JOIN hypotheses h ON p.hypothesis_id = h.id
+    WHERE h.simulation_id = ${id}
+    ORDER BY p.sort_order
+  `;
 
   return {
     id: sim.id,
     name: sim.name,
     startDate: sim.start_date,
     endDate: sim.end_date,
-    prestations: prestations.map((p: Record<string, unknown>) => ({
-      id: p.id,
-      name: p.name,
-      category: p.category ?? undefined,
-      quantity: p.quantity,
-      productionCost: p.production_cost,
-      price: p.price,
-      offered: p.offered === 1,
-    })),
     hypotheses: hypotheses.map((h: Record<string, unknown>) => ({
       id: h.id,
       name: h.name,
@@ -71,6 +67,20 @@ export async function getFullSimulation(id: string): Promise<Record<string, any>
       storeDistributionMode: h.store_distribution_mode ?? 'egal',
       zoneId: h.zone_id ?? 'zone1',
       collapsed: h.collapsed === 1,
+      includedInHypothesis: h.included_in_hypothesis === undefined ? true : h.included_in_hypothesis !== 0,
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any
+      prestations: (allPrestations as any[])
+        .filter((p: Record<string, unknown>) => p.hypothesis_id === h.id)
+        .map((p: Record<string, unknown>) => ({
+          id: p.id,
+          name: p.name,
+          category: p.category ?? undefined,
+          quantity: p.quantity,
+          productionCost: p.production_cost,
+          price: p.price,
+          offered: p.offered === 1,
+          fromPreset: p.from_preset === 1,
+        })),
       // eslint-disable-next-line @typescript-eslint/no-explicit-any
       levers: (allLevers as any[])
         .filter((l: Record<string, unknown>) => l.hypothesis_id === h.id)
@@ -89,6 +99,7 @@ export async function getFullSimulation(id: string): Promise<Record<string, any>
           startDate: l.start_date,
           endDate: l.end_date,
           collapsed: l.collapsed === 1,
+          includedInHypothesis: l.included_in_hypothesis === undefined ? true : l.included_in_hypothesis !== 0,
         })),
     })),
   };
@@ -100,6 +111,8 @@ export async function getPresetsWithLevers(): Promise<any[]> {
   const presets = await sql`SELECT * FROM presets ORDER BY sort_order` as any[];
   // eslint-disable-next-line @typescript-eslint/no-explicit-any
   const levers = await sql`SELECT * FROM preset_levers ORDER BY sort_order` as any[];
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  const prestations = await sql`SELECT * FROM preset_prestations ORDER BY sort_order` as any[];
   return presets.map(p => ({
     id: p.id,
     name: p.name,
@@ -125,6 +138,16 @@ export async function getPresetsWithLevers(): Promise<any[]> {
         impressions: l.impressions,
         startDate: l.start_date,
         endDate: l.end_date,
+      })),
+    prestations: prestations
+      .filter((r: Record<string, unknown>) => r.preset_id === p.id)
+      .map((r: Record<string, unknown>) => ({
+        name: r.name,
+        category: r.category ?? undefined,
+        quantity: r.quantity,
+        productionCost: r.production_cost,
+        price: r.price,
+        offered: r.offered === 1,
       })),
   }));
 }

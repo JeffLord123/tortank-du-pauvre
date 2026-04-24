@@ -1,13 +1,16 @@
-import { useState, useRef } from 'react';
-import { ChevronDown, Trash2, CalendarDays, Lock, LockOpen } from 'lucide-react';
+import { useState, useRef, useEffect } from 'react';
+import { ChevronDown, Trash2, CalendarDays, Lock, LockOpen, Eye, EyeOff } from 'lucide-react';
 import { useSimulationStore } from '../store/simulationStore';
 import { LEVER_CONFIGS, getZoneAvgPop } from '../data/defaults';
 import type { Lever, Hypothesis } from '../types';
+import { leversIncludedInHypothesis } from '../types';
 import { formatNum, formatImpressions } from '../utils/formatNum';
 import NumInput, { PlainNumericInput } from './NumInput';
 import FrenchDateInput from './FrenchDateInput';
 import LeverLogoBadge from './LeverLogoBadge';
 import SliderWithTooltip from './SliderWithTooltip';
+import AlertFieldFlash from './AlertFieldFlash';
+import type { LeverFlashRegion } from './LeverCard';
 
 interface Props {
   lever: Lever;
@@ -15,9 +18,19 @@ interface Props {
   index: number;
   budgetLocked: boolean;
   onToggleBudgetLock: () => void;
+  alertFlashRegion?: LeverFlashRegion;
+  alertFlashKey?: string;
 }
 
-export default function LeverCardV3({ lever, hypothesis, index, budgetLocked, onToggleBudgetLock }: Props) {
+export default function LeverCardV3({
+  lever,
+  hypothesis,
+  index,
+  budgetLocked,
+  onToggleBudgetLock,
+  alertFlashRegion = null,
+  alertFlashKey = '',
+}: Props) {
   const { removeLever, toggleLeverCollapse, updateLever, globalParams, stores, leverConfigs } = useSimulationStore();
   const config = leverConfigs[lever.type] ?? LEVER_CONFIGS[lever.type];
 
@@ -30,8 +43,8 @@ export default function LeverCardV3({ lever, hypothesis, index, budgetLocked, on
   // When budget unlocks, force back to €
   const effectiveBudgetUnit = budgetLocked ? budgetUnit : '€';
 
-  // Total budget across all levers (for % calculation)
-  const totalHypBudget = hypothesis.levers.reduce((s, l) => s + l.budget, 0);
+  // Total budget des leviers inclus dans le scénario (pour % affiché)
+  const totalHypBudget = leversIncludedInHypothesis(hypothesis.levers).reduce((s, l) => s + l.budget, 0);
   const budgetPct = totalHypBudget > 0 ? Math.round((lever.budget / totalHypBudget) * 1000) / 10 : 0;
 
   // Local slider states
@@ -150,16 +163,42 @@ export default function LeverCardV3({ lever, hypothesis, index, budgetLocked, on
     );
   }
 
+  const excludedFromScenario = lever.includedInHypothesis === false;
+  const r = alertFlashRegion;
+  const k = alertFlashKey;
+  const isRowTarget = r === 'budget' || r === 'coverage' || r === 'repetition';
+  const flashEntireCard = r === 'card';
+  const headFlash = !!r && isRowTarget && lever.collapsed;
+  const flashBudgetBlock = r === 'budget' && !lever.collapsed;
+  const flashCoverageBlock = r === 'coverage' && !lever.collapsed;
+  const flashRepetitionBlock = r === 'repetition' && !lever.collapsed;
+  const keySeg = `${k}-h${lever.collapsed ? 1 : 0}`;
+
+  const rootRef = useRef<HTMLDivElement>(null);
+  useEffect(() => {
+    const el = rootRef.current;
+    if (!el) return;
+    if (!flashEntireCard) {
+      el.classList.remove('animate-alert-flash');
+      return;
+    }
+    el.classList.remove('animate-alert-flash');
+    void el.getBoundingClientRect();
+    el.classList.add('animate-alert-flash');
+  }, [flashEntireCard, k]);
+
   return (
     <div
-      className="glass-card animate-fade-in"
+      ref={rootRef}
+      className={`glass-card animate-fade-in ${excludedFromScenario ? 'opacity-[0.58]' : ''}`}
       style={{ animationDelay: `${index * 50}ms`, borderLeftColor: config?.color, borderLeftWidth: '3px' }}
     >
       {/* Header */}
-      <div
-        className="flex items-center gap-2.5 px-4 py-2 cursor-pointer hover:bg-fg/[0.06] transition-colors"
-        onClick={() => toggleLeverCollapse(hypothesis.id, lever.id)}
-      >
+      <AlertFieldFlash active={headFlash} animKey={keySeg} className="-mx-0.5 px-0.5 rounded-lg">
+        <div
+          className="flex items-center gap-2.5 px-4 py-2 cursor-pointer hover:bg-fg/[0.06] transition-colors"
+          onClick={() => toggleLeverCollapse(hypothesis.id, lever.id)}
+        >
         <LeverLogoBadge cfg={config} />
         <span className="font-semibold text-sm shrink-0">
           {config?.family && config.family !== 'Legacy'
@@ -167,14 +206,30 @@ export default function LeverCardV3({ lever, hypothesis, index, budgetLocked, on
             : (config?.label || lever.type)}
         </span>
 
-        <div className="flex-1 min-w-0 flex items-center gap-2 flex-wrap">
-          <span className="inline-flex items-center gap-1.5 text-[11px] font-mono font-semibold bg-navy-700/80 text-fg/80 px-2 py-0.5 rounded-full border border-fg/10 shrink-0">
-            <span className="text-[10px] font-sans font-medium text-fg/62 normal-case tracking-normal">Budget</span>
-            <span>{formatNum(lever.budget)}€</span>
-            {budgetLocked && <Lock className="w-2.5 h-2.5 text-teal-400/70" />}
+        <div className="flex-1 min-w-0 flex items-center gap-1.5 flex-wrap content-start">
+          <span
+            className="inline-flex items-center gap-1.5 text-[11px] font-mono font-semibold bg-navy-700/80 text-fg/80 px-2 py-0.5 rounded-full border border-fg/10 shrink-0 tabular-nums"
+            title="Budget (€) · couverture (%) · répétition (×) — valeurs actuelles du levier sur la zone."
+          >
+            <span>
+              {formatNum(displayBudget)}€ / {Number(displayCov).toFixed(1)}% / {Number(displayRep).toFixed(1)}×
+            </span>
+            <span
+              className="inline-flex w-2.5 h-2.5 shrink-0 items-center justify-center"
+              title={
+                budgetLocked
+                  ? 'Budget verrouillé : couverture et répétition s’ajustent au budget.'
+                  : 'Budget déverrouillé : le budget suit vos réglages couverture / répétition.'
+              }
+            >
+              {budgetLocked ? <Lock className="w-2.5 h-2.5 text-teal-400/70" /> : <span className="block w-2.5 h-2.5" aria-hidden />}
+            </span>
           </span>
-          <span className="inline-flex items-center text-[10px] font-mono font-medium bg-navy-700/60 text-fg/75 px-1.5 py-0.5 rounded-full border border-fg/15 shrink-0">
-            CPM {lever.cpm.toFixed(2)}€
+          <span
+            className="inline-flex items-center text-[10px] font-mono font-medium bg-navy-700/60 text-fg/75 px-1.5 py-0.5 rounded-full border border-fg/15 shrink-0 tabular-nums"
+            title="CPM — coût pour mille impressions (€), avant marge."
+          >
+            {lever.cpm.toFixed(2)} €
           </span>
           {(() => {
             const purchase = lever.purchaseCpm ?? 0;
@@ -182,21 +237,38 @@ export default function LeverCardV3({ lever, hypothesis, index, budgetLocked, on
             const m = ((lever.cpm - purchase) / lever.cpm) * 100;
             const cls = m >= 40 ? 'text-teal-400' : m >= 35 ? 'text-amber-400' : 'text-coral-400';
             return (
-              <span className={`inline-flex items-center text-[10px] font-mono font-medium bg-navy-700/60 px-1.5 py-0.5 rounded-full border border-fg/15 shrink-0 ${cls}`}>
-                Marge {m.toFixed(1)}%
+              <span
+                className={`inline-flex items-center text-[10px] font-mono font-medium bg-navy-700/60 px-1.5 py-0.5 rounded-full border border-fg/15 shrink-0 tabular-nums ${cls}`}
+                title="Marge d’achat — (CPM affiché − CPM d’achat) / CPM, en %."
+              >
+                {m.toFixed(1)}%
               </span>
             );
           })()}
-          <span className="inline-flex items-center text-[11px] font-medium bg-navy-700/60 text-fg/75 px-2 py-0.5 rounded-full border border-fg/15 shrink-0">
-            {lever.coverage}% couv.
-          </span>
-          <span className="inline-flex items-center text-[11px] font-medium bg-navy-700/60 text-fg/75 px-2 py-0.5 rounded-full border border-fg/15 shrink-0">
-            {lever.repetition}× rép.
-          </span>
         </div>
 
         <div className="flex items-center gap-2">
           <button
+            type="button"
+            onClick={e => {
+              e.stopPropagation();
+              updateLever(hypothesis.id, lever.id, { includedInHypothesis: excludedFromScenario });
+            }}
+            className={`p-1.5 rounded-md transition-colors ${
+              excludedFromScenario
+                ? 'text-amber-400/95 bg-amber-400/15 hover:bg-amber-400/25'
+                : 'text-fg/45 hover:text-fg/78 hover:bg-fg/10'
+            }`}
+            title={
+              excludedFromScenario
+                ? 'Réintégrer dans le scénario (récap, totaux, comparaison)'
+                : 'Exclure temporairement du scénario (récap et totaux)'
+            }
+          >
+            {excludedFromScenario ? <EyeOff className="w-3.5 h-3.5" /> : <Eye className="w-3.5 h-3.5" />}
+          </button>
+          <button
+            type="button"
             onClick={e => { e.stopPropagation(); removeLever(hypothesis.id, lever.id); }}
             className="p-1.5 rounded-md text-red-500 hover:text-red-400 hover:bg-red-500/10 transition-colors"
             title="Supprimer le levier"
@@ -207,7 +279,8 @@ export default function LeverCardV3({ lever, hypothesis, index, budgetLocked, on
             className={`w-4 h-4 text-fg/60 transition-transform duration-200 ${lever.collapsed ? '' : 'rotate-180'}`}
           />
         </div>
-      </div>
+        </div>
+      </AlertFieldFlash>
 
       {/* Content */}
       <div className={`collapse-transition ${lever.collapsed ? '' : 'open'}`}>
@@ -242,6 +315,11 @@ export default function LeverCardV3({ lever, hypothesis, index, budgetLocked, on
             </div>
 
             {/* Budget */}
+            <AlertFieldFlash
+              active={flashBudgetBlock}
+              animKey={`${k}-bud-${keySeg}`}
+              className="-mx-0.5 px-0.5 rounded-lg"
+            >
             <div>
               <div className="flex items-center justify-between mb-1">
                 <label className="text-[10px] uppercase tracking-wider text-amber-400">Budget levier</label>
@@ -309,8 +387,14 @@ export default function LeverCardV3({ lever, hypothesis, index, budgetLocked, on
                 )}
               </div>
             </div>
+            </AlertFieldFlash>
 
             {/* Coverage */}
+            <AlertFieldFlash
+              active={flashCoverageBlock}
+              animKey={`${k}-cov-${keySeg}`}
+              className="-mx-0.5 px-0.5 rounded-lg"
+            >
             <div>
               <div className="flex items-center justify-between mb-1">
                 <label className="text-[10px] uppercase tracking-wider text-blue-400">Couverture</label>
@@ -367,8 +451,14 @@ export default function LeverCardV3({ lever, hypothesis, index, budgetLocked, on
                 </div>
               </div>
             </div>
+            </AlertFieldFlash>
 
             {/* Repetition */}
+            <AlertFieldFlash
+              active={flashRepetitionBlock}
+              animKey={`${k}-rep-${keySeg}`}
+              className="-mx-0.5 px-0.5 rounded-lg"
+            >
             <div>
               <div className="flex items-center justify-between mb-1">
                 <label className="text-[10px] uppercase tracking-wider text-purple-400">Répétition</label>
@@ -403,6 +493,7 @@ export default function LeverCardV3({ lever, hypothesis, index, budgetLocked, on
                 </div>
               </div>
             </div>
+            </AlertFieldFlash>
 
             {/* Impressions readout */}
             <div className="flex items-center justify-between py-2 px-3 rounded-lg bg-navy-800/30 border border-navy-600/10">

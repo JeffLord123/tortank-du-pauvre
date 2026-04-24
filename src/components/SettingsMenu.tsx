@@ -74,6 +74,7 @@ export default function SettingsMenu() {
     <div ref={ref} className="relative">
       <button
         type="button"
+        data-tour="tour-settings"
         onClick={() => setOpen(o => !o)}
         className="flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-xs font-medium bg-navy-800/55 text-fg/85 border border-fg/12 hover:text-fg hover:bg-navy-800/90 hover:border-teal-400/25 transition-all"
         title="Paramètres"

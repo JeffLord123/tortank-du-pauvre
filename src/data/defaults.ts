@@ -417,6 +417,7 @@ export const DEFAULT_PRESETS: Preset[] = [
       { type: 'Meta', startDate: '', endDate: '', cpm: 6.20, purchaseCpm: 0, minBudgetPerStore: 150, budget: 0, budgetPercent: 60, repetition: 3, coverage: 40, maxCoverage: 75, impressions: 0 },
       { type: 'Google', startDate: '', endDate: '', cpm: 7.80, purchaseCpm: 0, minBudgetPerStore: 200, budget: 0, budgetPercent: 40, repetition: 2, coverage: 30, maxCoverage: 70, impressions: 0 },
     ],
+    prestations: [],
   },
   {
     id: 'preset-multi',
@@ -435,6 +436,7 @@ export const DEFAULT_PRESETS: Preset[] = [
       { type: 'Youtube', startDate: '', endDate: '', cpm: 8.50, purchaseCpm: 0, minBudgetPerStore: 250, budget: 0, budgetPercent: 20, repetition: 2, coverage: 30, maxCoverage: 60, impressions: 0 },
       { type: 'Snap', startDate: '', endDate: '', cpm: 5.50, purchaseCpm: 0, minBudgetPerStore: 100, budget: 0, budgetPercent: 10, repetition: 2, coverage: 20, maxCoverage: 45, impressions: 0 },
     ],
+    prestations: [],
   },
   {
     id: 'preset-social',
@@ -452,6 +454,7 @@ export const DEFAULT_PRESETS: Preset[] = [
       { type: 'Snap', startDate: '', endDate: '', cpm: 5.50, purchaseCpm: 0, minBudgetPerStore: 100, budget: 0, budgetPercent: 20, repetition: 3, coverage: 25, maxCoverage: 45, impressions: 0 },
       { type: 'Pinterest', startDate: '', endDate: '', cpm: 3.80, purchaseCpm: 0, minBudgetPerStore: 80, budget: 0, budgetPercent: 20, repetition: 2, coverage: 20, maxCoverage: 35, impressions: 0 },
     ],
+    prestations: [],
   },
 ];
 

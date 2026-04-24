@@ -244,6 +244,25 @@ input[type="number"] {
   to { opacity: 1; transform: translateX(0); }
 }
 
+/* Alerte hypothèse : pulse sur le champ / slider concerné (visible sur glass-card) */
+@keyframes alert-flash {
+  0%,
+  100% {
+    background-color: transparent;
+    box-shadow: 0 0 0 0 transparent;
+  }
+  50% {
+    background-color: color-mix(in srgb, var(--color-amber-400) 28%, transparent);
+    box-shadow:
+      0 0 0 1px color-mix(in srgb, var(--color-amber-400) 55%, transparent),
+      0 0 20px -4px color-mix(in srgb, var(--color-amber-400) 35%, transparent);
+  }
+}
+
+.animate-alert-flash {
+  animation: alert-flash 0.7s ease-in-out 4;
+  border-radius: 0.5rem;
+}
 
 .animate-fade-in {
   animation: fadeIn 0.3s ease forwards;
@@ -255,4 +274,16 @@ input[type="number"] {
 
 .animate-pulse-glow {
   animation: pulse-glow 2s ease-in-out infinite;
+}
+
+/* Impression / export PDF (page comparaison) */
+@media print {
+  .no-print {
+    display: none !important;
+  }
+  html,
+  body {
+    print-color-adjust: exact;
+    -webkit-print-color-adjust: exact;
+  }
 }

@@ -7,6 +7,13 @@
  *
  * The script is idempotent: re-running it won't duplicate data (ON CONFLICT DO NOTHING).
  * It does NOT touch or modify the SQLite file (opened read-only).
+ *
+ * Schema notes vs old version:
+ *   - prestations: moved from simulation_id → hypothesis_id (uses first hypothesis of each simulation)
+ *   - levers: new included_in_hypothesis column (default 1)
+ *   - hypotheses: new included_in_hypothesis column (default 1)
+ *   - prestations: new from_preset column (default 0)
+ *   - new preset_prestations table
  */
 
 import Database from 'better-sqlite3';
@@ -37,6 +44,16 @@ console.log('Schema ready.');
 function count(table) {
   const row = sqlite.prepare(`SELECT COUNT(*) AS c FROM ${table}`).get();
   return row.c;
+}
+
+function tableHasColumn(table, column) {
+  const cols = sqlite.prepare(`PRAGMA table_info(${table})`).all().map(c => c.name);
+  return cols.includes(column);
+}
+
+function tableExists(table) {
+  const row = sqlite.prepare(`SELECT name FROM sqlite_master WHERE type='table' AND name=?`).get(table);
+  return !!row;
 }
 
 // ── global_params ────────────────────────────────────────────────────────────
@@ -100,6 +117,21 @@ for (const r of plRows) {
 }
 console.log(`  preset_levers: ${plRows.length} rows`);
 
+// ── preset_prestations ────────────────────────────────────────────────────────
+console.log('Migrating preset_prestations...');
+let ppRows = [];
+if (tableExists('preset_prestations')) {
+  ppRows = sqlite.prepare('SELECT * FROM preset_prestations ORDER BY sort_order').all();
+  for (const r of ppRows) {
+    await sql`
+      INSERT INTO preset_prestations (id, preset_id, name, category, quantity, production_cost, price, offered, sort_order)
+      VALUES (${r.id}, ${r.preset_id}, ${r.name ?? ''}, ${r.category ?? null}, ${r.quantity ?? 1}, ${r.production_cost ?? 0}, ${r.price ?? 0}, ${r.offered ?? 0}, ${r.sort_order ?? 0})
+      ON CONFLICT DO NOTHING
+    `;
+  }
+}
+console.log(`  preset_prestations: ${ppRows.length} rows`);
+
 // ── simulations ───────────────────────────────────────────────────────────────
 console.log('Migrating simulations...');
 const simRows = sqlite.prepare('SELECT * FROM simulations').all();
@@ -115,10 +147,12 @@ console.log(`  simulations: ${simRows.length} rows`);
 // ── hypotheses ────────────────────────────────────────────────────────────────
 console.log('Migrating hypotheses...');
 const hypRows = sqlite.prepare('SELECT * FROM hypotheses ORDER BY sort_order').all();
+const hasHypIncluded = tableHasColumn('hypotheses', 'included_in_hypothesis');
 for (const r of hypRows) {
+  const incl = hasHypIncluded ? (r.included_in_hypothesis ?? 1) : 1;
   await sql`
-    INSERT INTO hypotheses (id, simulation_id, name, max_budget_per_store, objective_mode, budget_mode, total_budget, retrocommission_percent, collapsed, sort_order, store_distribution_mode, zone_id)
-    VALUES (${r.id}, ${r.simulation_id}, ${r.name}, ${r.max_budget_per_store ?? 0}, ${r.objective_mode ?? 'budget'}, ${r.budget_mode ?? 'automatique'}, ${r.total_budget ?? 0}, ${r.retrocommission_percent ?? 0}, ${r.collapsed ?? 0}, ${r.sort_order ?? 0}, ${r.store_distribution_mode ?? 'egal'}, ${r.zone_id ?? 'zone1'})
+    INSERT INTO hypotheses (id, simulation_id, name, max_budget_per_store, objective_mode, budget_mode, total_budget, retrocommission_percent, collapsed, sort_order, store_distribution_mode, zone_id, included_in_hypothesis)
+    VALUES (${r.id}, ${r.simulation_id}, ${r.name}, ${r.max_budget_per_store ?? 0}, ${r.objective_mode ?? 'budget'}, ${r.budget_mode ?? 'automatique'}, ${r.total_budget ?? 0}, ${r.retrocommission_percent ?? 0}, ${r.collapsed ?? 0}, ${r.sort_order ?? 0}, ${r.store_distribution_mode ?? 'egal'}, ${r.zone_id ?? 'zone1'}, ${incl})
     ON CONFLICT DO NOTHING
   `;
 }
@@ -127,26 +161,47 @@ console.log(`  hypotheses: ${hypRows.length} rows`);
 // ── levers ────────────────────────────────────────────────────────────────────
 console.log('Migrating levers...');
 const leverRows = sqlite.prepare('SELECT * FROM levers ORDER BY sort_order').all();
+const hasLeverIncluded = tableHasColumn('levers', 'included_in_hypothesis');
 for (const r of leverRows) {
+  const incl = hasLeverIncluded ? (r.included_in_hypothesis ?? 1) : 1;
   await sql`
-    INSERT INTO levers (id, hypothesis_id, type, cpm, purchase_cpm, min_budget_per_store, budget, budget_percent, repetition, coverage, max_coverage, impressions, start_date, end_date, collapsed, sort_order)
-    VALUES (${r.id}, ${r.hypothesis_id}, ${r.type}, ${r.cpm ?? 0}, ${r.purchase_cpm ?? 0}, ${r.min_budget_per_store ?? 0}, ${r.budget ?? 0}, ${r.budget_percent ?? 0}, ${r.repetition ?? 3}, ${r.coverage ?? 30}, ${r.max_coverage ?? 65}, ${r.impressions ?? 0}, ${r.start_date ?? ''}, ${r.end_date ?? ''}, ${r.collapsed ?? 0}, ${r.sort_order ?? 0})
+    INSERT INTO levers (id, hypothesis_id, type, cpm, purchase_cpm, min_budget_per_store, budget, budget_percent, repetition, coverage, max_coverage, impressions, start_date, end_date, collapsed, sort_order, included_in_hypothesis)
+    VALUES (${r.id}, ${r.hypothesis_id}, ${r.type}, ${r.cpm ?? 0}, ${r.purchase_cpm ?? 0}, ${r.min_budget_per_store ?? 0}, ${r.budget ?? 0}, ${r.budget_percent ?? 0}, ${r.repetition ?? 3}, ${r.coverage ?? 30}, ${r.max_coverage ?? 65}, ${r.impressions ?? 0}, ${r.start_date ?? ''}, ${r.end_date ?? ''}, ${r.collapsed ?? 0}, ${r.sort_order ?? 0}, ${incl})
     ON CONFLICT DO NOTHING
   `;
 }
 console.log(`  levers: ${leverRows.length} rows`);
 
-// ── prestations ───────────────────────────────────────────────────────────────
+// ── prestations (moved from simulation_id → hypothesis_id) ───────────────────
+// Old schema: prestations.simulation_id → find first hypothesis of that simulation.
+// New schema: prestations.hypothesis_id (direct).
 console.log('Migrating prestations...');
 const presRows = sqlite.prepare('SELECT * FROM prestations ORDER BY sort_order').all();
+const hasHypId = tableHasColumn('prestations', 'hypothesis_id');
+const hasFromPreset = tableHasColumn('prestations', 'from_preset');
+
+// Build simulation → first hypothesis map (for old schema migration)
+const simToFirstHyp = {};
+if (!hasHypId) {
+  for (const h of hypRows) {
+    if (!simToFirstHyp[h.simulation_id]) {
+      simToFirstHyp[h.simulation_id] = h.id;
+    }
+  }
+}
+
+let skipped = 0;
 for (const r of presRows) {
+  const hypId = hasHypId ? r.hypothesis_id : simToFirstHyp[r.simulation_id];
+  if (!hypId) { skipped++; continue; }
+  const fromPreset = hasFromPreset ? (r.from_preset ?? 0) : 0;
   await sql`
-    INSERT INTO prestations (id, simulation_id, name, category, quantity, production_cost, price, offered, sort_order)
-    VALUES (${r.id}, ${r.simulation_id}, ${r.name ?? ''}, ${r.category ?? null}, ${r.quantity ?? 1}, ${r.production_cost ?? 0}, ${r.price ?? 0}, ${r.offered ?? 0}, ${r.sort_order ?? 0})
+    INSERT INTO prestations (id, hypothesis_id, name, category, quantity, production_cost, price, offered, sort_order, from_preset)
+    VALUES (${r.id}, ${hypId}, ${r.name ?? ''}, ${r.category ?? null}, ${r.quantity ?? 1}, ${r.production_cost ?? 0}, ${r.price ?? 0}, ${r.offered ?? 0}, ${r.sort_order ?? 0}, ${fromPreset})
     ON CONFLICT DO NOTHING
   `;
 }
-console.log(`  prestations: ${presRows.length} rows`);
+console.log(`  prestations: ${presRows.length - skipped} rows${skipped ? ` (${skipped} skipped — no hypothesis found)` : ''}`);
 
 // ── excel_uploads ─────────────────────────────────────────────────────────────
 console.log('Migrating excel_uploads...');

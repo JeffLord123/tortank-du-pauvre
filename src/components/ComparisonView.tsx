@@ -1,94 +1,109 @@
-import { useState, useRef } from 'react';
-import { createPortal } from 'react-dom';
+import { useState, useRef, useEffect } from 'react';
+import { useNavigate } from 'react-router-dom';
+import * as XLSX from 'xlsx';
 import { useSimulationStore, type HypothesisSummary } from '../store/simulationStore';
-import { LEVER_CONFIGS } from '../data/defaults';
-import LeverLogoBadge from './LeverLogoBadge';
-import { BarChart, Bar, XAxis, YAxis, ResponsiveContainer, Tooltip, Legend } from 'recharts';
-import { GitCompareArrows, Eye, Repeat, DollarSign, Layers, ArrowUp, ArrowDown, Minus, Info, Plus, Percent, TrendingUp } from 'lucide-react';
-import { formatNum } from '../utils/formatNum';
+import type { Hypothesis } from '../types';
+import { isLeverIncludedInHypothesis } from '../types';
+import ComparisonReportContent from './ComparisonReportContent';
+import { GitCompareArrows, Download, ChevronDown, FileSpreadsheet, FileText } from 'lucide-react';
 
-function CoverageCell({ summary }: { summary: HypothesisSummary }) {
-  const [show, setShow] = useState(false);
-  const [pos, setPos] = useState({ top: 0, left: 0 });
-  const iconRef = useRef<HTMLSpanElement>(null);
-  const hideTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
-  const detail = summary.coverageDetail;
-  const nonExposureProduct = detail.reduce((prod, l) => prod * (1 - l.coverage / 100), 1);
-
-  function handleEnter() {
-    if (hideTimer.current) clearTimeout(hideTimer.current);
-    if (iconRef.current) {
-      const r = iconRef.current.getBoundingClientRect();
-      setPos({ top: r.top, left: r.left - 8 });
-    }
-    setShow(true);
-  }
-  function handleLeave() {
-    hideTimer.current = setTimeout(() => setShow(false), 120);
-  }
-
-  return (
-    <span className="inline-flex items-center gap-1.5">
-      {summary.generalCoverage}%
-      {detail.length > 0 && (
-        <span ref={iconRef} onMouseEnter={handleEnter} onMouseLeave={handleLeave}>
-          <Info className="w-3 h-3 text-fg/40 hover:text-fg/70 cursor-help transition-colors" />
-        </span>
-      )}
-      {show &&
-        detail.length > 0 &&
-        createPortal(
-          <div
-            className="fixed z-[9999] w-64 p-3 rounded-lg shadow-xl text-xs border text-left"
-            style={{
-              top: pos.top,
-              left: pos.left,
-              transform: 'translate(-100%, -100%)',
-              background: 'var(--chart-tooltip-bg)',
-              borderColor: 'var(--chart-tooltip-border)',
-              color: 'var(--chart-tooltip-fg)',
-            }}
-            onMouseEnter={handleEnter}
-            onMouseLeave={handleLeave}
-          >
-            <p className="font-semibold mb-1.5">Couverture dédupliquée</p>
-            {detail.map((l, i) => (
-              <div key={i} className="flex justify-between py-0.5">
-                <span>{l.name}</span>
-                <span className="font-mono">1 − {l.coverage}% = {Math.round((1 - l.coverage / 100) * 1000) / 10}%</span>
-              </div>
-            ))}
-            <div className="border-t border-fg/10 mt-1.5 pt-1.5 space-y-0.5">
-              <div className="flex justify-between">
-                <span>∏ non-exposition</span>
-                <span className="font-mono">{Math.round(nonExposureProduct * 1000) / 10}%</span>
-              </div>
-              <div className="flex justify-between font-semibold">
-                <span>1 − {Math.round(nonExposureProduct * 1000) / 10}%</span>
-                <span className="font-mono text-teal-400">{summary.generalCoverage}%</span>
-              </div>
-            </div>
-          </div>,
-          document.body,
-        )}
-    </span>
-  );
+/** Libellés de colonnes uniques si plusieurs hypothèses portent le même nom. */
+function hypothesisColumnLabels(hypotheses: Hypothesis[]): string[] {
+  const nameCount = new Map<string, number>();
+  return hypotheses.map((h) => {
+    const n = (nameCount.get(h.name) ?? 0) + 1;
+    nameCount.set(h.name, n);
+    const dup = hypotheses.filter((x) => x.name === h.name).length > 1;
+    return dup ? `${h.name} (${n})` : h.name;
+  });
 }
 
-function DiffBadge({ a, b, suffix = '' }: { a: number; b: number; suffix?: string }) {
-  const diff = b - a;
-  if (Math.abs(diff) < 0.1) return <Minus className="w-3 h-3 text-fg/62" />;
-  const isUp = diff > 0;
-  return (
-    <span className={`text-[10px] font-mono flex items-center gap-0.5 ${isUp ? 'text-teal-400' : 'text-coral-400'}`}>
-      {isUp ? <ArrowUp className="w-3 h-3" /> : <ArrowDown className="w-3 h-3" />}
-      {isUp ? '+' : ''}{diff.toFixed(1)}{suffix}
-    </span>
-  );
+function exportHypothesisComparisonToXlsx(
+  simulationLabel: string,
+  hypotheses: Hypothesis[],
+  summaries: (HypothesisSummary | null)[],
+  allLeverTypes: string[],
+) {
+  const cols = hypothesisColumnLabels(hypotheses);
+  const row = (metric: string, values: (number | string)[]) => {
+    const o: Record<string, string | number> = { Métrique: metric };
+    cols.forEach((c, i) => {
+      o[c] = values[i] ?? '';
+    });
+    return o;
+  };
+
+  const mainRows: Record<string, string | number>[] = [];
+
+  mainRows.push(row('Objectif budget (€)', summaries.map((s) => s?.totalBudget ?? '')));
+
+  for (const type of allLeverTypes) {
+    const budgets = hypotheses.map((h) => {
+      const lever = h.levers.find((l) => l.type === type);
+      if (lever == null) return '';
+      return isLeverIncludedInHypothesis(lever) ? lever.budget : 0;
+    });
+    const covs = hypotheses.map((h) => {
+      const lever = h.levers.find((l) => l.type === type);
+      if (lever == null) return '';
+      return isLeverIncludedInHypothesis(lever) ? lever.coverage : '';
+    });
+    const reps = hypotheses.map((h) => {
+      const lever = h.levers.find((l) => l.type === type);
+      if (lever == null) return '';
+      return isLeverIncludedInHypothesis(lever) ? lever.repetition : '';
+    });
+    mainRows.push(row(`${type} — budget (€)`, budgets));
+    mainRows.push(row(`${type} — couverture (%)`, covs));
+    mainRows.push(row(`${type} — répétition`, reps));
+  }
+
+  mainRows.push(row('Couverture globale (%)', summaries.map((s) => s?.generalCoverage ?? '')));
+  mainRows.push(row('Rép. moyenne', summaries.map((s) => s?.avgRepetition ?? '')));
+  mainRows.push(row('Prestas addi. (€)', summaries.map((s) => s?.prestationsSaleTotal ?? '')));
+  mainRows.push(row('Rétrocom (%)', summaries.map((s) => (s != null ? s.retrocommissionPercent : ''))));
+  mainRows.push(row('Marge (€)', summaries.map((s) => (s != null ? Math.round(s.marginAmount) : ''))));
+  mainRows.push(row('Marge (%)', summaries.map((s) => (s != null ? s.marginPercent : ''))));
+  mainRows.push(row('Budget total avec prestas (€)', summaries.map((s) => s?.grandTotal ?? '')));
+
+  const wsMain = XLSX.utils.json_to_sheet(mainRows);
+  const wb = XLSX.utils.book_new();
+  XLSX.utils.book_append_sheet(wb, wsMain, 'Comparaison');
+
+  if (allLeverTypes.length > 0) {
+    const budgetRows = allLeverTypes.map((type) => {
+      const o: Record<string, string | number> = { Levier: type };
+      hypotheses.forEach((h, i) => {
+        const lever = h.levers.find((l) => l.type === type);
+        o[cols[i]] = lever != null && isLeverIncludedInHypothesis(lever) ? lever.budget : lever != null ? 0 : '';
+      });
+      return o;
+    });
+    const wsBudget = XLSX.utils.json_to_sheet(budgetRows);
+    XLSX.utils.book_append_sheet(wb, wsBudget, 'Budget par levier');
+  }
+
+  const safeSim = simulationLabel.replace(/[/\\?%*:|"<>]/g, '-').trim().slice(0, 60) || 'simulation';
+  const d = new Date().toISOString().slice(0, 10);
+  XLSX.writeFile(wb, `comparaison-hypotheses-${safeSim}-${d}.xlsx`);
 }
 
 export default function ComparisonView() {
+  const navigate = useNavigate();
   const { simulation, getHypothesisSummary, leverConfigs } = useSimulationStore();
+  const [exportMenuOpen, setExportMenuOpen] = useState(false);
+  const exportMenuRef = useRef<HTMLDivElement>(null);
+
+  useEffect(() => {
+    if (!exportMenuOpen) return;
+    const onDoc = (e: MouseEvent) => {
+      if (exportMenuRef.current && !exportMenuRef.current.contains(e.target as Node)) {
+        setExportMenuOpen(false);
+      }
+    };
+    document.addEventListener('mousedown', onDoc);
+    return () => document.removeEventListener('mousedown', onDoc);
+  }, [exportMenuOpen]);
 
   if (!simulation || simulation.hypotheses.length < 2) {
     return (
@@ -102,276 +117,81 @@ export default function ComparisonView() {
   }
 
   const hypotheses = simulation.hypotheses;
-  const summaries = hypotheses.map(h => getHypothesisSummary(h.id));
+  const summaries = hypotheses.map((h) => getHypothesisSummary(h.id));
 
-  // Build comparison chart data
-  const allLeverTypes = [...new Set(hypotheses.flatMap(h => h.levers.map(l => l.type)))];
-  const budgetComparisonData = allLeverTypes.map(type => {
+  const allLeverTypes = [...new Set(hypotheses.flatMap((h) => h.levers.map((l) => l.type)))];
+  const budgetComparisonData = allLeverTypes.map((type) => {
     const entry: Record<string, string | number> = { name: type };
-    hypotheses.forEach(h => {
-      const lever = h.levers.find(l => l.type === type);
-      entry[h.name] = lever?.budget || 0;
+    hypotheses.forEach((h) => {
+      const lever = h.levers.find((l) => l.type === type);
+      entry[h.name] = lever && isLeverIncludedInHypothesis(lever) ? lever.budget : 0;
     });
     return entry;
   });
 
-  const COLORS = ['#00e5a0', '#667eea', '#f59e0b', '#ef4444', '#ec4899'];
-
-  /** Colonne des écarts entre hypothèses 1 et 2 — désactivée pour l’instant */
   const showDiffColumn = false;
 
   return (
     <div className="space-y-4 animate-slide-in">
-      <h3 className="text-xs font-semibold uppercase tracking-wider text-fg/72 flex items-center gap-2">
-        <GitCompareArrows className="w-4 h-4" />
-        Comparaison des hypothèses
-      </h3>
-
-      {/* Comparison table */}
-      <div className="glass-card overflow-hidden">
-        <div className="overflow-x-auto">
-          <table className="w-full text-xs">
-            <thead>
-              <tr className="border-b border-fg/12">
-                <th className="text-left px-4 py-3 text-[10px] uppercase tracking-wider text-fg/60 font-medium">
-                  Métrique
-                </th>
-                {hypotheses.map((h, i) => (
-                  <th key={h.id} className="text-right px-4 py-3 font-medium" style={{ color: COLORS[i % COLORS.length] }}>
-                    {h.name}
-                  </th>
-                ))}
-                {showDiffColumn && hypotheses.length >= 2 && (
-                  <th className="text-right px-4 py-3 text-[10px] uppercase tracking-wider text-fg/62 font-medium">
-                    Diff
-                  </th>
-                )}
-              </tr>
-            </thead>
-            <tbody>
-              {/* Objectif budget */}
-              <tr className="border-b border-fg/[0.09] hover:bg-fg/[0.06]">
-                <td className="px-4 py-2.5 text-fg/82 flex items-center gap-2">
-                  <DollarSign className="w-3 h-3" /> Objectif budget
-                </td>
-                {summaries.map((s, i) => (
-                  <td key={i} className="text-right px-4 py-2.5 font-mono">
-                    {s ? `${formatNum(s.totalBudget)}€` : '-'}
-                  </td>
-                ))}
-                {showDiffColumn && summaries.length >= 2 && summaries[0] && summaries[1] && (
-                  <td className="text-right px-4 py-2.5">
-                    <DiffBadge a={summaries[0].totalBudget} b={summaries[1].totalBudget} suffix="€" />
-                  </td>
-                )}
-              </tr>
-
-              {/* Prestas addi. */}
-              <tr className="border-b border-fg/[0.09] hover:bg-fg/[0.06]">
-                <td className="px-4 py-2.5 text-fg/82 flex items-center gap-2">
-                  <Plus className="w-3 h-3" /> Prestas addi.
-                </td>
-                {summaries.map((s, i) => (
-                  <td key={i} className="text-right px-4 py-2.5 font-mono">
-                    {s ? `${formatNum(s.prestationsSaleTotal)}€` : '-'}
-                  </td>
-                ))}
-                {showDiffColumn && summaries.length >= 2 && summaries[0] && summaries[1] && (
-                  <td className="text-right px-4 py-2.5">
-                    <DiffBadge a={summaries[0].prestationsSaleTotal} b={summaries[1].prestationsSaleTotal} suffix="€" />
-                  </td>
-                )}
-              </tr>
-
-              {/* Budget total avec prestas */}
-              <tr className="border-b border-fg/[0.09] hover:bg-fg/[0.06] bg-fg/[0.03]">
-                <td className="px-4 py-2.5 text-fg/90 font-medium flex items-center gap-2">
-                  <DollarSign className="w-3 h-3 text-teal-400" /> Budget total avec prestas
-                </td>
-                {summaries.map((s, i) => (
-                  <td key={i} className="text-right px-4 py-2.5 font-mono font-semibold text-teal-400">
-                    {s ? `${formatNum(s.grandTotal)}€` : '-'}
-                  </td>
-                ))}
-                {showDiffColumn && summaries.length >= 2 && summaries[0] && summaries[1] && (
-                  <td className="text-right px-4 py-2.5">
-                    <DiffBadge a={summaries[0].grandTotal} b={summaries[1].grandTotal} suffix="€" />
-                  </td>
-                )}
-              </tr>
-
-              {/* Rétrocom % */}
-              <tr className="border-b border-fg/[0.09] hover:bg-fg/[0.06]">
-                <td className="px-4 py-2.5 text-fg/82 flex items-center gap-2">
-                  <Percent className="w-3 h-3" /> Rétrocom
-                </td>
-                {summaries.map((s, i) => (
-                  <td key={i} className="text-right px-4 py-2.5 font-mono">
-                    {s ? `${s.retrocommissionPercent.toFixed(1)}%` : '-'}
-                  </td>
-                ))}
-                {showDiffColumn && summaries.length >= 2 && summaries[0] && summaries[1] && (
-                  <td className="text-right px-4 py-2.5">
-                    <DiffBadge a={summaries[0].retrocommissionPercent} b={summaries[1].retrocommissionPercent} suffix="%" />
-                  </td>
-                )}
-              </tr>
-
-              {/* Marge */}
-              <tr className="border-b border-fg/[0.09] hover:bg-fg/[0.06]">
-                <td className="px-4 py-2.5 text-fg/82 flex items-center gap-2">
-                  <TrendingUp className="w-3 h-3" /> Marge
-                </td>
-                {summaries.map((s, i) => (
-                  <td key={i} className="text-right px-4 py-2.5 font-mono">
-                    {s ? (
-                      <span className={s.marginAmount >= 0 ? 'text-teal-400' : 'text-red-400'}>
-                        {formatNum(Math.round(s.marginAmount))}€
-                        <span className="text-[10px] text-fg/65 ml-1">({s.marginPercent.toFixed(1)}%)</span>
-                      </span>
-                    ) : '-'}
-                  </td>
-                ))}
-                {showDiffColumn && summaries.length >= 2 && summaries[0] && summaries[1] && (
-                  <td className="text-right px-4 py-2.5">
-                    <DiffBadge a={summaries[0].marginAmount} b={summaries[1].marginAmount} suffix="€" />
-                  </td>
-                )}
-              </tr>
-
-              {/* Leviers */}
-              <tr className="border-b border-fg/[0.09] hover:bg-fg/[0.06]">
-                <td className="px-4 py-2.5 text-fg/82 flex items-center gap-2">
-                  <Layers className="w-3 h-3" /> Leviers
-                </td>
-                {summaries.map((s, i) => (
-                  <td key={i} className="text-right px-4 py-2.5 font-mono">
-                    {s ? s.leverCount : '-'}
-                  </td>
-                ))}
-                {showDiffColumn && summaries.length >= 2 && summaries[0] && summaries[1] && (
-                  <td className="text-right px-4 py-2.5">
-                    <DiffBadge a={summaries[0].leverCount} b={summaries[1].leverCount} />
-                  </td>
-                )}
-              </tr>
-
-              {/* Couverture */}
-              <tr className="border-b border-fg/[0.09] hover:bg-fg/[0.06]">
-                <td className="px-4 py-2.5 text-fg/82 flex items-center gap-2">
-                  <Eye className="w-3 h-3" /> Couverture
-                </td>
-                {summaries.map((s, i) => (
-                  <td key={i} className="text-right px-4 py-2.5 font-mono">
-                    {s ? <CoverageCell summary={s} /> : '-'}
-                  </td>
-                ))}
-                {showDiffColumn && summaries.length >= 2 && summaries[0] && summaries[1] && (
-                  <td className="text-right px-4 py-2.5">
-                    <DiffBadge a={summaries[0].generalCoverage} b={summaries[1].generalCoverage} suffix="%" />
-                  </td>
-                )}
-              </tr>
-
-              {/* Repetition */}
-              <tr className="border-b border-fg/[0.09] hover:bg-fg/[0.06]">
-                <td className="px-4 py-2.5 text-fg/82 flex items-center gap-2">
-                  <Repeat className="w-3 h-3" /> Rép. moyenne
-                </td>
-                {summaries.map((s, i) => (
-                  <td key={i} className="text-right px-4 py-2.5 font-mono">
-                    {s ? `${s.avgRepetition}×` : '-'}
-                  </td>
-                ))}
-                {showDiffColumn && summaries.length >= 2 && summaries[0] && summaries[1] && (
-                  <td className="text-right px-4 py-2.5">
-                    <DiffBadge a={summaries[0].avgRepetition} b={summaries[1].avgRepetition} suffix="×" />
-                  </td>
-                )}
-              </tr>
-
-              {/* Per-lever details */}
-              {allLeverTypes.map(type => {
-                const cfg = leverConfigs[type] ?? LEVER_CONFIGS[type];
-                return (
-                  <tr key={type} className="border-b border-fg/[0.09] hover:bg-fg/[0.06]">
-                    <td className="px-4 py-2.5 text-fg/82 flex items-center gap-2">
-                      <LeverLogoBadge cfg={cfg} className="w-5 h-5" iconClassName="w-3 h-3" />
-                      {type}
-                    </td>
-                    {hypotheses.map((h, i) => {
-                      const lever = h.levers.find(l => l.type === type);
-                      return (
-                        <td key={i} className="text-right px-4 py-2.5 font-mono text-fg/88">
-                          {lever ? (
-                            <div className="flex flex-col items-end gap-0.5">
-                              <span>{formatNum(lever.budget)}€</span>
-                              <span className="text-[10px] text-fg/65">{lever.coverage}% · {lever.repetition}×</span>
-                            </div>
-                          ) : (
-                            <span className="text-fg/55">—</span>
-                          )}
-                        </td>
-                      );
-                    })}
-                    {showDiffColumn && hypotheses.length >= 2 && (
-                      <td className="text-right px-4 py-2.5">
-                        {(() => {
-                          const a = hypotheses[0].levers.find(l => l.type === type);
-                          const b = hypotheses[1].levers.find(l => l.type === type);
-                          if (a && b) return <DiffBadge a={a.budget} b={b.budget} suffix="€" />;
-                          return <span className="text-fg/55">—</span>;
-                        })()}
-                      </td>
-                    )}
-                  </tr>
-                );
-              })}
-            </tbody>
-          </table>
+      <div className="flex items-center justify-between gap-3 flex-wrap">
+        <h3 className="text-xs font-semibold uppercase tracking-wider text-fg/72 flex items-center gap-2">
+          <GitCompareArrows className="w-4 h-4" />
+          Comparaison des hypothèses
+        </h3>
+        <div className="relative shrink-0" ref={exportMenuRef}>
+          <button
+            type="button"
+            onClick={() => setExportMenuOpen((o) => !o)}
+            className="flex items-center gap-1.5 px-2.5 py-2 rounded-lg text-[10px] uppercase tracking-wider text-teal-400/90 hover:text-teal-300 border border-teal-400/25 hover:border-teal-400/45 bg-teal-400/5 hover:bg-teal-400/10 transition-colors"
+            aria-expanded={exportMenuOpen}
+            aria-haspopup="menu"
+          >
+            <Download className="w-3.5 h-3.5" />
+            Exporter
+            <ChevronDown className={`w-3.5 h-3.5 transition-transform ${exportMenuOpen ? 'rotate-180' : ''}`} />
+          </button>
+          {exportMenuOpen && (
+            <div
+              role="menu"
+              className="absolute right-0 top-full mt-1.5 min-w-[11.5rem] py-1 rounded-xl border border-fg/15 bg-navy-900/98 backdrop-blur-md shadow-xl z-30 text-left"
+            >
+              <button
+                type="button"
+                role="menuitem"
+                className="w-full flex items-center gap-2 px-3 py-2.5 text-left text-xs text-fg/88 hover:bg-fg/10 transition-colors"
+                onClick={() => {
+                  exportHypothesisComparisonToXlsx(simulation.name, hypotheses, summaries, allLeverTypes);
+                  setExportMenuOpen(false);
+                }}
+              >
+                <FileSpreadsheet className="w-4 h-4 text-teal-400/90 shrink-0" />
+                <span>Export Excel (.xlsx)</span>
+              </button>
+              <button
+                type="button"
+                role="menuitem"
+                className="w-full flex items-center gap-2 px-3 py-2.5 text-left text-xs text-fg/88 hover:bg-fg/10 transition-colors"
+                onClick={() => {
+                  setExportMenuOpen(false);
+                  navigate('/print/comparison');
+                }}
+              >
+                <FileText className="w-4 h-4 text-teal-400/90 shrink-0" />
+                <span>Export PDF (page dédiée)</span>
+              </button>
+            </div>
+          )}
         </div>
       </div>
 
-      {/* Budget comparison chart */}
-      {budgetComparisonData.length > 0 && (
-        <div className="glass-card p-4">
-          <h4 className="text-[10px] uppercase tracking-wider text-fg/60 mb-3">Budget par levier</h4>
-          <div className="h-[180px]">
-            <ResponsiveContainer width="100%" height="100%">
-              <BarChart data={budgetComparisonData} barGap={4}>
-                <XAxis
-                  dataKey="name"
-                  tick={{ fontSize: 10, fill: 'rgba(255,255,255,0.3)' }}
-                  axisLine={false}
-                  tickLine={false}
-                />
-                <YAxis
-                  tick={{ fontSize: 10, fill: 'rgba(255,255,255,0.3)' }}
-                  axisLine={false}
-                  tickLine={false}
-                  tickFormatter={v => formatNum(v)}
-                />
-                <Tooltip
-                  contentStyle={{
-                    background: '#111827',
-                    border: '1px solid rgba(255,255,255,0.1)',
-                    borderRadius: '8px',
-                    fontSize: '11px',
-                    color: '#fff',
-                  }}
-                  formatter={(value) => [`${formatNum(Number(value))}€`]}
-                />
-                <Legend
-                  wrapperStyle={{ fontSize: '10px', color: 'rgba(255,255,255,0.4)' }}
-                />
-                {hypotheses.map((h, i) => (
-                  <Bar key={h.id} dataKey={h.name} fill={COLORS[i % COLORS.length]} radius={[3, 3, 0, 0]} barSize={16} />
-                ))}
-              </BarChart>
-            </ResponsiveContainer>
-          </div>
-        </div>
-      )}
+      <ComparisonReportContent
+        hypotheses={hypotheses}
+        summaries={summaries}
+        allLeverTypes={allLeverTypes}
+        budgetComparisonData={budgetComparisonData}
+        leverConfigs={leverConfigs}
+        showDiffColumn={showDiffColumn}
+      />
     </div>
   );
 }

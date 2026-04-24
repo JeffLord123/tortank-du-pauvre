@@ -22,7 +22,7 @@ export default function BackForward() {
   const redoHint = `${mac ? '⌘Y' : 'Ctrl+Y'}${nextEntry ? ` · ${nextEntry.actionLabel}` : ''}`;
 
   return (
-    <div className="flex items-center gap-1">
+    <div className="flex items-center gap-1" data-tour="tour-history">
       <button
         type="button"
         onClick={() => void undo()}

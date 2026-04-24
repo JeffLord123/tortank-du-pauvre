@@ -1,6 +1,12 @@
 import { useState, useEffect, useLayoutEffect, useRef, useMemo } from 'react';
 import { Plus, Copy, Trash2, Zap, Target, DollarSign, Percent, Sliders, Unlock, ChevronDown, ChevronUp, BookmarkPlus, AlertTriangle, Lock, Equal, Users, Scale } from 'lucide-react';
-import { useSimulationStore, computeDedupCoverage, distributeCoverageWaterfill } from '../store/simulationStore';
+import {
+  useSimulationStore,
+  computeDedupCoverage,
+  distributeCoverageWaterfill,
+  getPrimaryWarning,
+} from '../store/simulationStore';
+import type { Warning } from '../store/simulationStore';
 import { useProfileStore, getActiveProfile } from '../store/profileStore';
 import { useVersionStore } from '../store/versionStore';
 import { LEVER_TYPES, LEVER_CONFIGS, ZONES, getZoneAvgPop } from '../data/defaults';
@@ -9,13 +15,28 @@ import LeverCardV3 from './LeverCardV3';
 import LeverLogoBadge from './LeverLogoBadge';
 import WarningBanner from './WarningBanner';
 import type { Hypothesis, LeverType, BudgetMode, ObjectiveMode, Preset, StoreDistributionMode } from '../types';
+import { leversIncludedInHypothesis } from '../types';
 import { formatNum } from '../utils/formatNum';
-import NumInput from './NumInput';
+import NumInput, { blurOnEnter } from './NumInput';
 import PrestationsPanel from './PrestationsPanel';
 import SliderWithTooltip from './SliderWithTooltip';
+import { getHypothesisAccentColor } from '../utils/hypothesisAccent';
+import { useUiPreferencesStore } from '../store/uiPreferencesStore';
+import AlertFieldFlash from './AlertFieldFlash';
 
 // V3: per-lever budget lock (true = locked by default)
 const DEFAULT_BUDGET_LOCKED = true;
+
+function shouldFlashBudgetField(
+  primary: Warning | null,
+  which: 'totalBudget' | 'maxBudgetPerStore' | 'budgetGrid',
+): boolean {
+  if (!primary || primary.leverId !== 'global' || !primary.focusHypothesisField) return false;
+  const f = primary.focusHypothesisField;
+  if (f === 'budgetGrid') return which === 'budgetGrid';
+  if (which === 'budgetGrid') return false;
+  return f === which;
+}
 
 const BUDGET_MODE_LABELS: Record<BudgetMode, { label: string; icon: React.ElementType; desc: string }> = {
   automatique:  { label: 'Automatique', icon: Zap, desc: 'Budget réparti selon la grille' },
@@ -60,6 +81,8 @@ function nextPresetNameFromHypothesisName(name: string, existingNames: Set<strin
 interface HypothesisCardProps {
   hypothesis: Hypothesis;
   isActive: boolean;
+  colorIndex: number;
+  isFirstHypothesis: boolean;
 }
 
 function ZoneDropdown({
@@ -130,7 +153,7 @@ function ZoneDropdown({
   );
 }
 
-function HypothesisCard({ hypothesis, isActive }: HypothesisCardProps) {
+function HypothesisCard({ hypothesis, isActive, colorIndex, isFirstHypothesis }: HypothesisCardProps) {
   const {
     setActiveHypothesis,
     updateHypothesis,
@@ -151,6 +174,7 @@ function HypothesisCard({ hypothesis, isActive }: HypothesisCardProps) {
   const activeProfileId = useProfileStore(s => s.activeProfileId);
   const activeProfile = getActiveProfile(profiles, activeProfileId);
   const version = useVersionStore(s => s.activeVersion);
+  const alertFieldFlashesEnabled = useUiPreferencesStore(s => s.alertFieldFlashesEnabled);
 
   const visiblePresets = useMemo(() => {
     if (!activeProfile) return presets;
@@ -176,15 +200,19 @@ function HypothesisCard({ hypothesis, isActive }: HypothesisCardProps) {
   function handleToggleBudgetLock(leverId: string) {
     setBudgetLocks(prev => ({ ...prev, [leverId]: !(prev[leverId] ?? DEFAULT_BUDGET_LOCKED) }));
   }
-  const allBudgetsLocked = hypothesis.levers.length > 0 &&
-    hypothesis.levers.every(l => isBudgetLocked(l.id));
+  const leversInScenario = leversIncludedInHypothesis(hypothesis.levers);
+  const allBudgetsLocked = leversInScenario.length > 0 &&
+    leversInScenario.every(l => isBudgetLocked(l.id));
 
   function handleV3TotalBudgetChange(newTotal: number) {
-    const currentSum = hypothesis.levers.reduce((s, l) => s + l.budget, 0);
+    const included = leversIncludedInHypothesis(hypothesis.levers);
+    const currentSum = included.reduce((s, l) => s + l.budget, 0);
+    const nIncl = Math.max(1, included.length);
     for (const lever of hypothesis.levers) {
+      if (lever.includedInHypothesis === false) continue;
       const newBudget = currentSum > 0
         ? Math.round((lever.budget / currentSum) * newTotal)
-        : Math.round(newTotal / hypothesis.levers.length);
+        : Math.round(newTotal / nIncl);
       // coverage fixed, rep adjusts
       const maxCov = lever.maxCoverage;
       const sc = stores.length || 1;
@@ -212,8 +240,8 @@ function HypothesisCard({ hypothesis, isActive }: HypothesisCardProps) {
   const isV2Coverage = version === 'v2' && hypothesis.objectiveMode === 'couverture';
   // Couverture dédupliquée actuelle : 1 - ∏(1 - cov_i/100). C'est la même
   // valeur que celle du recap hypothèse.
-  const dedupLeverCoverage = hypothesis.levers.length > 0
-    ? Math.round(computeDedupCoverage(hypothesis.levers.map(l => l.coverage)) * 10) / 10
+  const dedupLeverCoverage = leversInScenario.length > 0
+    ? Math.round(computeDedupCoverage(leversInScenario.map(l => l.coverage)) * 10) / 10
     : 0;
   const [localTargetCov, setLocalTargetCov] = useState<number | null>(null);
   const [covInput, setCovInput] = useState<string>('');
@@ -239,7 +267,7 @@ function HypothesisCard({ hypothesis, isActive }: HypothesisCardProps) {
   // reste le maxCoverage du levier (ex. "YouTube · 60 %") alors que la
   // position sur la piste utilise la dédup (ex. 84 %).
   const coverageFillPoints = useMemo(() => {
-    const lvs = hypothesis.levers;
+    const lvs = leversIncludedInHypothesis(hypothesis.levers);
     const n = lvs.length;
     if (n === 0) return [] as { id: string; type: string; color: string; threshold: number; maxCoverage: number }[];
     const sorted = [...lvs].sort((a, b) => a.maxCoverage - b.maxCoverage);
@@ -261,7 +289,7 @@ function HypothesisCard({ hypothesis, isActive }: HypothesisCardProps) {
       cum += m;
     }
     return pts;
-  }, [hypothesis.levers, leverConfigs]);
+  }, [hypothesis.levers, leverConfigs]); // recompute when any lever inclusion changes
 
   // Répulsion des labels pour qu'ils ne se superposent pas. Le trait pointe
   // toujours à la position "threshold" réelle ; on ne déplace que la position
@@ -318,6 +346,19 @@ function HypothesisCard({ hypothesis, isActive }: HypothesisCardProps) {
   const presetTriggerRef = useRef<HTMLButtonElement>(null);
   const presetMenuRef = useRef<HTMLDivElement>(null);
   const warnings = getHypothesisWarnings(hypothesis.id);
+  const primaryWarning = useMemo(() => getPrimaryWarning(warnings), [warnings]);
+  const flashAnimKey = primaryWarning
+    ? `${primaryWarning.type}-${primaryWarning.message}`
+    : '';
+  const isUncappedInfo = primaryWarning?.type === 'budget_uncapped';
+  const flashFieldDedup = isUncappedInfo && isV2Coverage;
+  const flashFieldGrid = shouldFlashBudgetField(primaryWarning, 'budgetGrid');
+  const flashFieldTotal = shouldFlashBudgetField(primaryWarning, 'totalBudget') && !flashFieldDedup;
+  const flashFieldMax = shouldFlashBudgetField(primaryWarning, 'maxBudgetPerStore');
+  const primaryLeverRegionFor = (leverId: string): import('./LeverCard').LeverFlashRegion => {
+    if (!primaryWarning || primaryWarning.leverId !== leverId) return null;
+    return (primaryWarning.focusLeverControl ?? 'card') as import('./LeverCard').LeverFlashRegion;
+  };
 
   const appliedPresetDefinition = useMemo(
     () => (appliedPreset ? presets.find(p => p.id === appliedPreset.id) ?? null : null),
@@ -399,9 +440,14 @@ function HypothesisCard({ hypothesis, isActive }: HypothesisCardProps) {
       className={`glass-card transition-all duration-200 ${
         isActive ? 'ring-1 ring-teal-400/30' : ''
       }`}
+      style={{
+        borderLeftColor: getHypothesisAccentColor(colorIndex),
+        borderLeftWidth: '3px',
+      }}
     >
       {/* Hypothesis header */}
       <div
+        data-tour={isFirstHypothesis ? 'tour-hypothesis' : undefined}
         className="flex items-center gap-3 px-4 py-2.5 cursor-pointer select-none hover:bg-fg/[0.06] transition-colors"
         onClick={() => {
           setActiveHypothesis(hypothesis.id);
@@ -417,6 +463,7 @@ function HypothesisCard({ hypothesis, isActive }: HypothesisCardProps) {
             value={hypothesis.name}
             onClick={e => e.stopPropagation()}
             onChange={e => updateHypothesis(hypothesis.id, { name: e.target.value })}
+            onKeyDown={blurOnEnter}
             className="bg-navy-800/80 border border-navy-600/50 rounded-md px-3 py-1 text-sm font-semibold text-fg focus:outline-none focus:border-teal-400/50 transition-colors shrink-0"
             style={{ width: `${Math.max(hypothesis.name.length, 6) + 2}ch` }}
           />
@@ -528,8 +575,9 @@ function HypothesisCard({ hypothesis, isActive }: HypothesisCardProps) {
                           Hypothèse verrouillée
                         </div>
                         <div className="text-[10px] text-fg/65 mt-0.5 leading-snug">
-                          Preset « {appliedPreset!.name} » appliqué · les leviers sont figés sur les
-                          valeurs du preset.
+                          Preset « {appliedPreset!.name} » appliqué · leviers et prestations (preset) figés
+                          sur les valeurs enregistrées. Pour modifier ou ajouter des prestations, déverrouillez
+                          d’abord l’hypothèse.
                         </div>
                       </div>
                       <button
@@ -543,60 +591,62 @@ function HypothesisCard({ hypothesis, isActive }: HypothesisCardProps) {
                     </div>
                   )}
 
-                  {/* Zone de chalandise */}
-                  <div>
-                    <label className="text-[10px] uppercase tracking-wider text-fg/60 mb-1.5 block">
-                      Zone de chalandise
-                    </label>
-                    <ZoneDropdown
-                      hypothesisId={hypothesis.id}
-                      zoneId={hypothesis.zoneId ?? 'zone1'}
-                      disabled={isLocked}
-                    />
-                    <p className="text-[10px] text-fg/45 mt-1">
-                      Population moyenne&nbsp;:{' '}
-                      {formatNum(
-                        getZoneAvgPop(stores, hypothesis.zoneId),
-                      )}{' '}
-                      hab./magasin
-                    </p>
-                  </div>
-
-                  <div>
-                    <label className="text-[10px] uppercase tracking-wider text-fg/60 mb-1.5 block">
-                      Répartition budget par magasin
-                    </label>
-                    <div className="flex rounded-lg overflow-hidden border border-navy-600/30">
-                      {STORE_DISTRIBUTION_MODES.map(({ id, label, desc, icon: Icon }) => {
-                        const mode = hypothesis.storeDistributionMode ?? 'egal';
-                        const on = mode === id;
-                        return (
-                          <button
-                            key={id}
-                            type="button"
-                            disabled={isLocked}
-                            onClick={() => updateHypothesis(hypothesis.id, { storeDistributionMode: id })}
-                            title={desc}
-                            className={`flex-1 py-2 px-2 text-xs font-medium transition-colors flex flex-row items-center justify-center gap-1.5 ${
-                              on ? 'bg-teal-400/15 text-teal-400' : 'bg-navy-800/40 text-fg/72 hover:text-fg/88'
-                            } ${isLocked ? 'opacity-40 cursor-not-allowed' : ''}`}
-                          >
-                            <Icon className="w-3 h-3 shrink-0" />
-                            {label}
-                          </button>
-                        );
-                      })}
+                  <div data-tour={isFirstHypothesis ? 'tour-zone' : undefined} className="space-y-4">
+                    {/* Zone de chalandise */}
+                    <div>
+                      <label className="text-[10px] uppercase tracking-wider text-fg/60 mb-1.5 block">
+                        Zone de chalandise
+                      </label>
+                      <ZoneDropdown
+                        hypothesisId={hypothesis.id}
+                        zoneId={hypothesis.zoneId ?? 'zone1'}
+                        disabled={isLocked}
+                      />
+                      <p className="text-[10px] text-fg/45 mt-1">
+                        Population moyenne&nbsp;:{' '}
+                        {formatNum(
+                          getZoneAvgPop(stores, hypothesis.zoneId),
+                        )}{' '}
+                        hab./magasin
+                      </p>
                     </div>
-                    <p className="text-[10px] text-fg/62 mt-1">
-                      {
-                        STORE_DISTRIBUTION_MODES.find(m => m.id === (hypothesis.storeDistributionMode ?? 'egal'))
-                          ?.desc
-                      }
-                    </p>
+
+                    <div>
+                      <label className="text-[10px] uppercase tracking-wider text-fg/60 mb-1.5 block">
+                        Répartition budget par magasin
+                      </label>
+                      <div className="flex rounded-lg overflow-hidden border border-navy-600/30">
+                        {STORE_DISTRIBUTION_MODES.map(({ id, label, desc, icon: Icon }) => {
+                          const mode = hypothesis.storeDistributionMode ?? 'egal';
+                          const on = mode === id;
+                          return (
+                            <button
+                              key={id}
+                              type="button"
+                              disabled={isLocked}
+                              onClick={() => updateHypothesis(hypothesis.id, { storeDistributionMode: id })}
+                              title={desc}
+                              className={`flex-1 py-2 px-2 text-xs font-medium transition-colors flex flex-row items-center justify-center gap-1.5 ${
+                                on ? 'bg-teal-400/15 text-teal-400' : 'bg-navy-800/40 text-fg/72 hover:text-fg/88'
+                              } ${isLocked ? 'opacity-40 cursor-not-allowed' : ''}`}
+                            >
+                              <Icon className="w-3 h-3 shrink-0" />
+                              {label}
+                            </button>
+                          );
+                        })}
+                      </div>
+                      <p className="text-[10px] text-fg/62 mt-1">
+                        {
+                          STORE_DISTRIBUTION_MODES.find(m => m.id === (hypothesis.storeDistributionMode ?? 'egal'))
+                            ?.desc
+                        }
+                      </p>
+                    </div>
                   </div>
 
                   {/* Config row */}
-                  <div className="space-y-3">
+                  <div className="space-y-3" data-tour={isFirstHypothesis ? 'tour-budget' : undefined}>
                     {/* V3 : pas de mode, juste budget total affiché */}
 
                     {/* V1 : Objectif + mode budget */}
@@ -736,38 +786,50 @@ function HypothesisCard({ hypothesis, isActive }: HypothesisCardProps) {
 
                   {/* Budget row V3 : total éditable si tous les leviers sont lockés, sinon calculé */}
                   {version === 'v3' && (
-                    <div className="grid grid-cols-2 gap-3">
-                      <div>
-                        <label className="text-[10px] uppercase tracking-wider text-fg/60 mb-1.5 block">Budget total</label>
-                        {allBudgetsLocked && hypothesis.levers.length > 0 ? (
-                          <div className="flex items-center gap-1.5">
-                            <NumInput
-                              value={hypothesis.totalBudget}
-                              onChange={handleV3TotalBudgetChange}
-                              min={0}
-                              className="min-w-0 flex-1 bg-navy-800/60 border border-navy-600/30 rounded-lg px-3 py-2 text-xs font-mono text-fg focus:outline-none focus:border-teal-400/40 transition-colors"
-                            />
-                            <span className="text-[10px] text-fg/62 tabular-nums shrink-0">€</span>
+                      <div className="grid grid-cols-2 gap-3">
+                        <AlertFieldFlash
+                          active={alertFieldFlashesEnabled && (flashFieldGrid || flashFieldTotal)}
+                          animKey={flashAnimKey}
+                          className="-mx-0.5 px-0.5 py-0.5 rounded-lg min-w-0"
+                        >
+                          <div>
+                            <label className="text-[10px] uppercase tracking-wider text-fg/60 mb-1.5 block">Budget total</label>
+                            {allBudgetsLocked && leversInScenario.length > 0 ? (
+                              <div className="flex items-center gap-1.5">
+                                <NumInput
+                                  value={hypothesis.totalBudget}
+                                  onChange={handleV3TotalBudgetChange}
+                                  min={0}
+                                  className="min-w-0 flex-1 bg-navy-800/60 border border-navy-600/30 rounded-lg px-3 py-2 text-xs font-mono text-fg focus:outline-none focus:border-teal-400/40 transition-colors"
+                                />
+                                <span className="text-[10px] text-fg/62 tabular-nums shrink-0">€</span>
+                              </div>
+                            ) : (
+                              <div className="bg-navy-800/30 border border-navy-600/10 rounded-lg px-3 py-2 text-xs font-mono text-teal-400">
+                                {formatNum(hypothesis.totalBudget)} €
+                              </div>
+                            )}
                           </div>
-                        ) : (
-                          <div className="bg-navy-800/30 border border-navy-600/10 rounded-lg px-3 py-2 text-xs font-mono text-teal-400">
-                            {formatNum(hypothesis.totalBudget)} €
+                        </AlertFieldFlash>
+                        <AlertFieldFlash
+                          active={alertFieldFlashesEnabled && (flashFieldGrid || flashFieldMax)}
+                          animKey={flashAnimKey}
+                          className="-mx-0.5 px-0.5 py-0.5 rounded-lg min-w-0"
+                        >
+                          <div>
+                            <label className="text-[10px] uppercase tracking-wider text-fg/60 mb-1.5 block">Budget max / magasin</label>
+                            <div className="flex items-center gap-1.5">
+                              <NumInput
+                                value={hypothesis.maxBudgetPerStore}
+                                onChange={v => updateHypothesis(hypothesis.id, { maxBudgetPerStore: v })}
+                                min={0}
+                                className="min-w-0 flex-1 bg-navy-800/60 border border-navy-600/30 rounded-lg px-3 py-2 text-xs font-mono text-fg focus:outline-none focus:border-teal-400/40 transition-colors"
+                              />
+                              <span className="text-[10px] text-fg/62 tabular-nums shrink-0">€</span>
+                            </div>
                           </div>
-                        )}
+                        </AlertFieldFlash>
                       </div>
-                      <div>
-                        <label className="text-[10px] uppercase tracking-wider text-fg/60 mb-1.5 block">Budget max / magasin</label>
-                        <div className="flex items-center gap-1.5">
-                          <NumInput
-                            value={hypothesis.maxBudgetPerStore}
-                            onChange={v => updateHypothesis(hypothesis.id, { maxBudgetPerStore: v })}
-                            min={0}
-                            className="min-w-0 flex-1 bg-navy-800/60 border border-navy-600/30 rounded-lg px-3 py-2 text-xs font-mono text-fg focus:outline-none focus:border-teal-400/40 transition-colors"
-                          />
-                          <span className="text-[10px] text-fg/62 tabular-nums shrink-0">€</span>
-                        </div>
-                      </div>
-                    </div>
                   )}
 
                   {/* Budget row / Couverture cible (V1/V2 seulement) */}
@@ -775,46 +837,63 @@ function HypothesisCard({ hypothesis, isActive }: HypothesisCardProps) {
                     <div className="space-y-3">
                       {/* Budget total disabled + Budget max/magasin */}
                       <div className="grid grid-cols-2 gap-3">
-                        <div>
-                          <label className="text-[10px] uppercase tracking-wider text-fg/60 mb-1.5 block">Budget total</label>
-                          {isLocked ? (
+                        <AlertFieldFlash
+                          active={alertFieldFlashesEnabled && (flashFieldGrid || flashFieldTotal)}
+                          animKey={flashAnimKey}
+                          className="-mx-0.5 px-0.5 py-0.5 rounded-lg min-w-0"
+                        >
+                          <div>
+                            <label className="text-[10px] uppercase tracking-wider text-fg/60 mb-1.5 block">Budget total</label>
+                            {isLocked ? (
+                              <div className="flex items-center gap-1.5">
+                                <NumInput
+                                  value={hypothesis.totalBudget}
+                                  onChange={v => updateHypothesis(hypothesis.id, { totalBudget: v })}
+                                  min={0}
+                                  disabled
+                                  title="Verrouillé par le preset · déverrouiller depuis la bannière"
+                                  className={budgetFieldInputClass}
+                                />
+                                <span className="text-[10px] text-fg/62 tabular-nums shrink-0" aria-hidden>
+                                  €
+                                </span>
+                              </div>
+                            ) : (
+                              <div className="bg-navy-800/30 border border-navy-600/10 rounded-lg px-3 py-2 text-xs font-mono text-teal-400">
+                                {formatNum(hypothesis.totalBudget)} €
+                              </div>
+                            )}
+                          </div>
+                        </AlertFieldFlash>
+                        <AlertFieldFlash
+                          active={alertFieldFlashesEnabled && (flashFieldGrid || flashFieldMax)}
+                          animKey={flashAnimKey}
+                          className="-mx-0.5 px-0.5 py-0.5 rounded-lg min-w-0"
+                        >
+                          <div>
+                            <label className="text-[10px] uppercase tracking-wider text-fg/60 mb-1.5 block">
+                              Budget max / magasin
+                            </label>
                             <div className="flex items-center gap-1.5">
                               <NumInput
-                                value={hypothesis.totalBudget}
-                                onChange={v => updateHypothesis(hypothesis.id, { totalBudget: v })}
+                                value={hypothesis.maxBudgetPerStore}
+                                onChange={v => updateHypothesis(hypothesis.id, { maxBudgetPerStore: v })}
                                 min={0}
-                                disabled
-                                title="Verrouillé par le preset · déverrouiller depuis la bannière"
+                                disabled={isLocked}
+                                title={isLocked ? 'Verrouillé par le preset · déverrouiller depuis la bannière' : undefined}
                                 className={budgetFieldInputClass}
                               />
-                              <span className="text-[10px] text-fg/62 tabular-nums shrink-0" aria-hidden>
-                                €
-                              </span>
+                              <span className="text-[10px] text-fg/62 tabular-nums shrink-0" aria-hidden>€</span>
                             </div>
-                          ) : (
-                            <div className="bg-navy-800/30 border border-navy-600/10 rounded-lg px-3 py-2 text-xs font-mono text-teal-400">
-                              {formatNum(hypothesis.totalBudget)} €
-                            </div>
-                          )}
-                        </div>
-                        <div>
-                          <label className="text-[10px] uppercase tracking-wider text-fg/60 mb-1.5 block">
-                            Budget max / magasin
-                          </label>
-                          <div className="flex items-center gap-1.5">
-                            <NumInput
-                              value={hypothesis.maxBudgetPerStore}
-                              onChange={v => updateHypothesis(hypothesis.id, { maxBudgetPerStore: v })}
-                              min={0}
-                              disabled={isLocked}
-                              title={isLocked ? 'Verrouillé par le preset · déverrouiller depuis la bannière' : undefined}
-                              className={budgetFieldInputClass}
-                            />
-                            <span className="text-[10px] text-fg/62 tabular-nums shrink-0" aria-hidden>€</span>
                           </div>
-                        </div>
+                        </AlertFieldFlash>
                       </div>
                       {/* Slider couverture cible pleine largeur */}
+                      <AlertFieldFlash
+                        active={alertFieldFlashesEnabled && flashFieldDedup}
+                        animKey={`${flashAnimKey}-dedup`}
+                        className="-mx-0.5 px-0.5 py-0.5 rounded-lg"
+                      >
                       <div>
                         <label className="text-[10px] uppercase tracking-wider text-fg/60 mb-1.5 block">
                           Couverture cible (dédupliquée)
@@ -845,12 +924,12 @@ function HypothesisCard({ hypothesis, isActive }: HypothesisCardProps) {
                               step={0.5}
                               value={displayCov}
                               label={`${displayCov.toFixed(1)} %`}
-                              disabled={hypothesis.levers.length === 0 || isCoverageGlobalSliderLocked}
+                              disabled={leversInScenario.length === 0 || isCoverageGlobalSliderLocked}
                               onChange={e => handleTargetCovChange(Number(e.target.value))}
                               onPointerDown={() => { isDraggingCov.current = true; setLocalTargetCov(dedupLeverCoverage); }}
                               onPointerUp={() => { isDraggingCov.current = false; setLocalTargetCov(null); }}
                               className={`w-full relative ${
-                                hypothesis.levers.length === 0 || isCoverageGlobalSliderLocked
+                                leversInScenario.length === 0 || isCoverageGlobalSliderLocked
                                   ? 'opacity-40 cursor-not-allowed'
                                   : ''
                               }`}
@@ -902,7 +981,7 @@ function HypothesisCard({ hypothesis, isActive }: HypothesisCardProps) {
                               min={0}
                               max={100}
                               step={0.5}
-                              disabled={hypothesis.levers.length === 0 || isCoverageGlobalSliderLocked}
+                              disabled={leversInScenario.length === 0 || isCoverageGlobalSliderLocked}
                               title={
                                 isCoverageGlobalSliderLocked
                                   ? 'Verrouillé par le preset couverture · déverrouiller depuis la bannière'
@@ -912,7 +991,7 @@ function HypothesisCard({ hypothesis, isActive }: HypothesisCardProps) {
                               onFocus={() => setCovInput(displayCov.toFixed(1))}
                               onChange={e => setCovInput(e.target.value)}
                               onBlur={commitCovInput}
-                              onKeyDown={e => { if (e.key === 'Enter') { (e.target as HTMLInputElement).blur(); } }}
+                              onKeyDown={blurOnEnter}
                               className="w-full bg-navy-800/60 border border-navy-600/30 rounded-md px-2 py-1.5 text-xs font-mono text-right text-fg focus:outline-none focus:border-teal-400/40 transition-colors disabled:opacity-40 disabled:cursor-not-allowed"
                             />
                             <span className="text-xs text-fg/60 shrink-0">%</span>
@@ -921,23 +1000,60 @@ function HypothesisCard({ hypothesis, isActive }: HypothesisCardProps) {
                         <p className="text-[10px] text-fg/45 mt-1">
                           {hypothesis.levers.length === 0
                             ? 'Ajoutez un levier pour activer ce slider'
+                            : leversInScenario.length === 0
+                              ? 'Réintégrez au moins un levier dans le scénario pour activer ce slider'
                             : isCoverageGlobalSliderLocked
                               ? 'Couverture figée par le preset · déverrouillez l’hypothèse pour ajuster'
                               : 'Ajuste le budget de chaque levier · la répétition s\'adapte'}
                         </p>
                       </div>
+                      </AlertFieldFlash>
                     </div>
                   ) : (
                     <div className="grid grid-cols-2 gap-3">
-                      <div>
-                        <label className="text-[10px] uppercase tracking-wider text-fg/60 mb-1.5 block">
-                          Budget total
-                        </label>
-                        {budgetEditable ? (
+                      <AlertFieldFlash
+                        active={alertFieldFlashesEnabled && (flashFieldGrid || flashFieldTotal)}
+                        animKey={flashAnimKey}
+                        className="-mx-0.5 px-0.5 py-0.5 rounded-lg min-w-0"
+                      >
+                        <div>
+                          <label className="text-[10px] uppercase tracking-wider text-fg/60 mb-1.5 block">
+                            Budget total
+                          </label>
+                          {budgetEditable ? (
+                            <div className="flex items-center gap-1.5">
+                              <NumInput
+                                value={hypothesis.totalBudget}
+                                onChange={v => updateHypothesis(hypothesis.id, { totalBudget: v })}
+                                min={0}
+                                disabled={isLocked}
+                                title={isLocked ? 'Verrouillé par le preset · déverrouiller depuis la bannière' : undefined}
+                                className={budgetFieldInputClass}
+                              />
+                              <span className="text-[10px] text-fg/62 tabular-nums shrink-0" aria-hidden>
+                                €
+                              </span>
+                            </div>
+                          ) : (
+                            <div className="bg-navy-800/30 border border-navy-600/10 rounded-lg px-3 py-2 text-xs font-mono text-teal-400">
+                              {formatNum(hypothesis.totalBudget)} €
+                            </div>
+                          )}
+                        </div>
+                      </AlertFieldFlash>
+                      <AlertFieldFlash
+                        active={alertFieldFlashesEnabled && (flashFieldGrid || flashFieldMax)}
+                        animKey={flashAnimKey}
+                        className="-mx-0.5 px-0.5 py-0.5 rounded-lg min-w-0"
+                      >
+                        <div>
+                          <label className="text-[10px] uppercase tracking-wider text-fg/60 mb-1.5 block">
+                            Budget max / magasin
+                          </label>
                           <div className="flex items-center gap-1.5">
                             <NumInput
-                              value={hypothesis.totalBudget}
-                              onChange={v => updateHypothesis(hypothesis.id, { totalBudget: v })}
+                              value={hypothesis.maxBudgetPerStore}
+                              onChange={v => updateHypothesis(hypothesis.id, { maxBudgetPerStore: v })}
                               min={0}
                               disabled={isLocked}
                               title={isLocked ? 'Verrouillé par le preset · déverrouiller depuis la bannière' : undefined}
@@ -947,30 +1063,8 @@ function HypothesisCard({ hypothesis, isActive }: HypothesisCardProps) {
                               €
                             </span>
                           </div>
-                        ) : (
-                          <div className="bg-navy-800/30 border border-navy-600/10 rounded-lg px-3 py-2 text-xs font-mono text-teal-400">
-                            {formatNum(hypothesis.totalBudget)} €
-                          </div>
-                        )}
-                      </div>
-                      <div>
-                        <label className="text-[10px] uppercase tracking-wider text-fg/60 mb-1.5 block">
-                          Budget max / magasin
-                        </label>
-                        <div className="flex items-center gap-1.5">
-                          <NumInput
-                            value={hypothesis.maxBudgetPerStore}
-                            onChange={v => updateHypothesis(hypothesis.id, { maxBudgetPerStore: v })}
-                            min={0}
-                            disabled={isLocked}
-                            title={isLocked ? 'Verrouillé par le preset · déverrouiller depuis la bannière' : undefined}
-                            className={budgetFieldInputClass}
-                          />
-                          <span className="text-[10px] text-fg/62 tabular-nums shrink-0" aria-hidden>
-                            €
-                          </span>
                         </div>
-                      </div>
+                      </AlertFieldFlash>
                     </div>
                   ))}
 
@@ -1029,15 +1123,24 @@ function HypothesisCard({ hypothesis, isActive }: HypothesisCardProps) {
                     index={i}
                     budgetLocked={isBudgetLocked(lever.id)}
                     onToggleBudgetLock={() => handleToggleBudgetLock(lever.id)}
+                    alertFlashRegion={alertFieldFlashesEnabled ? primaryLeverRegionFor(lever.id) : null}
+                    alertFlashKey={flashAnimKey}
                   />
                 ) : (
-                  <LeverCard key={lever.id} lever={lever} hypothesis={hypothesis} index={i} />
+                  <LeverCard
+                    key={lever.id}
+                    lever={lever}
+                    hypothesis={hypothesis}
+                    index={i}
+                    alertFlashRegion={alertFieldFlashesEnabled ? primaryLeverRegionFor(lever.id) : null}
+                    alertFlashKey={flashAnimKey}
+                  />
                 )
               )}
 
               {/* Add lever */}
               {availableLevers.length > 0 && (
-                <div className="relative">
+                <div className="relative" data-tour={isFirstHypothesis ? 'tour-levers' : undefined}>
                   <button
                     onClick={() => setShowAddLever(!showAddLever)}
                     className="w-full flex items-center justify-center gap-2 py-3 rounded-lg border border-dashed border-navy-600/40 text-fg/60 hover:text-teal-400 hover:border-teal-400/30 transition-all text-xs"
@@ -1093,6 +1196,14 @@ function HypothesisCard({ hypothesis, isActive }: HypothesisCardProps) {
                   )}
                 </div>
               )}
+            </div>
+
+            <div className="px-4 pb-4 pt-1">
+              <PrestationsPanel
+                hypothesisId={hypothesis.id}
+                isLocked={isLocked}
+                tourAnchor={isFirstHypothesis}
+              />
             </div>
 
           </div>
@@ -1313,8 +1424,14 @@ export default function HypothesisPanel() {
 
   return (
     <div className="space-y-4">
-      {simulation.hypotheses.map(h => (
-        <HypothesisCard key={h.id} hypothesis={h} isActive={h.id === activeHypothesisId} />
+      {simulation.hypotheses.map((h, i) => (
+        <HypothesisCard
+          key={h.id}
+          hypothesis={h}
+          isActive={h.id === activeHypothesisId}
+          colorIndex={i}
+          isFirstHypothesis={i === 0}
+        />
       ))}
 
       <button
@@ -1324,8 +1441,6 @@ export default function HypothesisPanel() {
         <Plus className="w-4 h-4" />
         Nouvelle hypothèse
       </button>
-
-      <PrestationsPanel />
     </div>
   );
 }

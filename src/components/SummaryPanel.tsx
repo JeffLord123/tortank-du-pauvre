@@ -3,6 +3,7 @@ import { createPortal } from 'react-dom';
 import { useSimulationStore } from '../store/simulationStore';
 import { useVersionStore } from '../store/versionStore';
 import { PieChart, Pie, Cell, ResponsiveContainer, Tooltip, BarChart, Bar, XAxis, YAxis, CartesianGrid } from 'recharts';
+import * as XLSX from 'xlsx';
 import {
   TrendingUp,
   TrendingDown,
@@ -19,8 +20,10 @@ import {
   Table2,
   X,
   ChevronsUpDown,
+  Download,
 } from 'lucide-react';
 import { formatNum, formatImpressions } from '../utils/formatNum';
+import { getHypothesisAccentColor } from '../utils/hypothesisAccent';
 import { getMarginThreshold } from '../data/defaults';
 import NumInput from './NumInput';
 
@@ -195,6 +198,51 @@ type StoreBudgetRow = {
 };
 type StoreSortKey = 'name' | 'population' | 'weight' | 'budget' | 'coverage' | 'repetition';
 
+type LeverRecapRow = {
+  id: string;
+  name: string;
+  budget: number;
+  impressions: number;
+  coverage: number;
+  repetition: number;
+  cpm: number;
+};
+type LeverSortKey = 'name' | 'budget' | 'impressions' | 'coverage' | 'repetition' | 'cpm';
+
+function exportStoreBudgetsToXlsx(rows: StoreBudgetRow[], hypothesisName: string) {
+  const sheetRows = rows.map((row, i) => ({
+    '#': i + 1,
+    Magasin: row.name,
+    Population: row.population,
+    'Poids %': row.weightPercent,
+    'Couverture %': row.coverage,
+    Répétition: row.repetition,
+    'Budget (€)': row.budget,
+  }));
+  const ws = XLSX.utils.json_to_sheet(sheetRows);
+  const wb = XLSX.utils.book_new();
+  XLSX.utils.book_append_sheet(wb, ws, 'Points de vente');
+  const safe = hypothesisName.replace(/[/\\?%*:|"<>]/g, '-').trim().slice(0, 80) || 'export';
+  XLSX.writeFile(wb, `points-de-vente-budgets-${safe}.xlsx`);
+}
+
+function exportLeversRecapToXlsx(rows: LeverRecapRow[], hypothesisName: string) {
+  const sheetRows = rows.map((row, i) => ({
+    '#': i + 1,
+    Levier: row.name,
+    'Budget (€)': row.budget,
+    Impressions: row.impressions,
+    'Couverture %': row.coverage,
+    Répétition: row.repetition,
+    'CPM (€)': row.cpm,
+  }));
+  const ws = XLSX.utils.json_to_sheet(sheetRows);
+  const wb = XLSX.utils.book_new();
+  XLSX.utils.book_append_sheet(wb, ws, 'Leviers');
+  const safe = hypothesisName.replace(/[/\\?%*:|"<>]/g, '-').trim().slice(0, 80) || 'export';
+  XLSX.writeFile(wb, `leviers-recap-${safe}.xlsx`);
+}
+
 function StoreBudgetsDialog({
   open,
   onClose,
@@ -254,7 +302,7 @@ function StoreBudgetsDialog({
         className="bg-navy-900 border border-navy-600/50 rounded-2xl shadow-2xl w-full max-w-3xl max-h-[85vh] flex flex-col overflow-hidden animate-fade-in"
         onClick={e => e.stopPropagation()}
       >
-        <div className="flex items-center justify-between px-4 py-4 border-b border-fg/12 shrink-0">
+        <div className="flex items-center justify-between px-4 py-4 border-b border-fg/12 shrink-0 gap-2">
           <div className="flex items-center gap-3 min-w-0">
             <div className="w-8 h-8 rounded-lg bg-teal-400/10 flex items-center justify-center shrink-0">
               <Table2 className="w-4 h-4 text-teal-400" />
@@ -264,14 +312,27 @@ function StoreBudgetsDialog({
               <p className="text-[10px] text-fg/60 truncate">{hypothesisName}</p>
             </div>
           </div>
-          <button
-            type="button"
-            onClick={onClose}
-            className="p-2 rounded-lg hover:bg-fg/10 text-fg/72 hover:text-fg transition-colors shrink-0"
-            aria-label="Fermer"
-          >
-            <X className="w-4 h-4" />
-          </button>
+          <div className="flex items-center gap-1 shrink-0">
+            {sortedRows.length > 0 && (
+              <button
+                type="button"
+                onClick={() => exportStoreBudgetsToXlsx(sortedRows, hypothesisName)}
+                className="flex items-center gap-1.5 px-2.5 py-2 rounded-lg text-[10px] uppercase tracking-wider text-teal-400/90 hover:text-teal-300 border border-teal-400/25 hover:border-teal-400/45 bg-teal-400/5 hover:bg-teal-400/10 transition-colors"
+                title="Télécharger le tableau (Excel)"
+              >
+                <Download className="w-3.5 h-3.5" />
+                Export .xlsx
+              </button>
+            )}
+            <button
+              type="button"
+              onClick={onClose}
+              className="p-2 rounded-lg hover:bg-fg/10 text-fg/72 hover:text-fg transition-colors"
+              aria-label="Fermer"
+            >
+              <X className="w-4 h-4" />
+            </button>
+          </div>
         </div>
         <div className="overflow-auto flex-1 min-h-0 px-4 py-3">
           <table className="w-full text-left text-xs border-collapse">
@@ -384,6 +445,201 @@ function StoreBudgetsDialog({
   );
 }
 
+function LeversRecapDialog({
+  open,
+  onClose,
+  rows,
+  hypothesisName,
+}: {
+  open: boolean;
+  onClose: () => void;
+  rows: LeverRecapRow[];
+  hypothesisName: string;
+}) {
+  const [sortKey, setSortKey] = useState<LeverSortKey>('budget');
+  const [sortDir, setSortDir] = useState<'asc' | 'desc'>('desc');
+
+  const sortedRows = useMemo(() => {
+    const copy = [...rows];
+    const m = sortDir === 'asc' ? 1 : -1;
+    copy.sort((a, b) => {
+      if (sortKey === 'name') return m * a.name.localeCompare(b.name, 'fr', { sensitivity: 'base' });
+      if (sortKey === 'impressions') return m * (a.impressions - b.impressions);
+      if (sortKey === 'coverage') return m * (a.coverage - b.coverage);
+      if (sortKey === 'repetition') return m * (a.repetition - b.repetition);
+      if (sortKey === 'cpm') return m * (a.cpm - b.cpm);
+      return m * (a.budget - b.budget);
+    });
+    return copy;
+  }, [rows, sortKey, sortDir]);
+
+  const onSort = useCallback(
+    (key: LeverSortKey) => {
+      if (key === sortKey) setSortDir(d => (d === 'asc' ? 'desc' : 'asc'));
+      else {
+        setSortKey(key);
+        setSortDir(key === 'name' ? 'asc' : 'desc');
+      }
+    },
+    [sortKey],
+  );
+
+  useEffect(() => {
+    if (open) {
+      setSortKey('budget');
+      setSortDir('desc');
+    }
+  }, [open]);
+
+  if (!open) return null;
+
+  return createPortal(
+    <div
+      className="fixed inset-0 z-[60] flex items-center justify-center p-4 bg-black/60 backdrop-blur-sm"
+      onClick={onClose}
+    >
+      <div
+        className="bg-navy-900 border border-navy-600/50 rounded-2xl shadow-2xl w-full max-w-4xl max-h-[85vh] flex flex-col overflow-hidden animate-fade-in"
+        onClick={e => e.stopPropagation()}
+      >
+        <div className="flex items-center justify-between px-4 py-4 border-b border-fg/12 shrink-0 gap-2">
+          <div className="flex items-center gap-3 min-w-0">
+            <div className="w-8 h-8 rounded-lg bg-teal-400/10 flex items-center justify-center shrink-0">
+              <Layers className="w-4 h-4 text-teal-400" />
+            </div>
+            <div className="min-w-0">
+              <h2 className="text-sm font-bold truncate">Leviers — détail</h2>
+              <p className="text-[10px] text-fg/60 truncate">{hypothesisName}</p>
+            </div>
+          </div>
+          <div className="flex items-center gap-1 shrink-0">
+            {sortedRows.length > 0 && (
+              <button
+                type="button"
+                onClick={() => exportLeversRecapToXlsx(sortedRows, hypothesisName)}
+                className="flex items-center gap-1.5 px-2.5 py-2 rounded-lg text-[10px] uppercase tracking-wider text-teal-400/90 hover:text-teal-300 border border-teal-400/25 hover:border-teal-400/45 bg-teal-400/5 hover:bg-teal-400/10 transition-colors"
+                title="Télécharger le tableau (Excel)"
+              >
+                <Download className="w-3.5 h-3.5" />
+                Export .xlsx
+              </button>
+            )}
+            <button
+              type="button"
+              onClick={onClose}
+              className="p-2 rounded-lg hover:bg-fg/10 text-fg/72 hover:text-fg transition-colors"
+              aria-label="Fermer"
+            >
+              <X className="w-4 h-4" />
+            </button>
+          </div>
+        </div>
+        <div className="overflow-auto flex-1 min-h-0 px-4 py-3">
+          <table className="w-full text-left text-xs border-collapse">
+            <thead>
+              <tr className="border-b border-fg/12 text-[10px] uppercase tracking-wider text-fg/55">
+                <th className="py-2 pr-3 font-medium w-10">#</th>
+                <th className="py-2 pr-3 font-medium">
+                  <button
+                    type="button"
+                    onClick={() => onSort('name')}
+                    className="inline-flex items-center gap-1 hover:text-fg/88 transition-colors"
+                  >
+                    Levier
+                    <SortGlyph active={sortKey === 'name'} dir={sortDir} />
+                  </button>
+                </th>
+                <th className="py-2 pr-3 font-medium text-right w-28">
+                  <div className="flex justify-end">
+                    <button
+                      type="button"
+                      onClick={() => onSort('budget')}
+                      className="inline-flex items-center gap-1 hover:text-fg/88 transition-colors"
+                    >
+                      Budget
+                      <SortGlyph active={sortKey === 'budget'} dir={sortDir} />
+                    </button>
+                  </div>
+                </th>
+                <th className="py-2 pr-3 font-medium text-right w-28">
+                  <div className="flex justify-end">
+                    <button
+                      type="button"
+                      onClick={() => onSort('impressions')}
+                      className="inline-flex items-center gap-1 hover:text-fg/88 transition-colors"
+                    >
+                      Impr.
+                      <SortGlyph active={sortKey === 'impressions'} dir={sortDir} />
+                    </button>
+                  </div>
+                </th>
+                <th className="py-2 pr-3 font-medium text-right w-20">
+                  <div className="flex justify-end">
+                    <button
+                      type="button"
+                      onClick={() => onSort('coverage')}
+                      className="inline-flex items-center gap-1 hover:text-fg/88 transition-colors"
+                    >
+                      Couv.
+                      <SortGlyph active={sortKey === 'coverage'} dir={sortDir} />
+                    </button>
+                  </div>
+                </th>
+                <th className="py-2 pr-3 font-medium text-right w-20">
+                  <div className="flex justify-end">
+                    <button
+                      type="button"
+                      onClick={() => onSort('repetition')}
+                      className="inline-flex items-center gap-1 hover:text-fg/88 transition-colors"
+                    >
+                      Rép.
+                      <SortGlyph active={sortKey === 'repetition'} dir={sortDir} />
+                    </button>
+                  </div>
+                </th>
+                <th className="py-2 font-medium text-right w-24">
+                  <div className="flex justify-end">
+                    <button
+                      type="button"
+                      onClick={() => onSort('cpm')}
+                      className="inline-flex items-center gap-1 hover:text-fg/88 transition-colors"
+                    >
+                      CPM
+                      <SortGlyph active={sortKey === 'cpm'} dir={sortDir} />
+                    </button>
+                  </div>
+                </th>
+              </tr>
+            </thead>
+            <tbody>
+              {sortedRows.length === 0 ? (
+                <tr>
+                  <td colSpan={7} className="py-8 text-center text-fg/50">
+                    Aucun levier
+                  </td>
+                </tr>
+              ) : (
+                sortedRows.map((row, i) => (
+                  <tr key={row.id} className="border-b border-fg/8 hover:bg-fg/5">
+                    <td className="py-2 pr-3 text-fg/45 font-mono tabular-nums">{i + 1}</td>
+                    <td className="py-2 pr-3 text-fg/90 align-top break-words max-w-[min(280px,45vw)]">{row.name}</td>
+                    <td className="py-2 pr-3 text-right font-mono text-teal-400/95 tabular-nums">{formatNum(row.budget)} €</td>
+                    <td className="py-2 pr-3 text-right font-mono text-fg/82 tabular-nums">{formatImpressions(row.impressions)}</td>
+                    <td className="py-2 pr-3 text-right font-mono text-fg/82 tabular-nums">{row.coverage}%</td>
+                    <td className="py-2 pr-3 text-right font-mono text-fg/82 tabular-nums">{row.repetition}×</td>
+                    <td className="py-2 text-right font-mono text-fg/82 tabular-nums">{formatNum(row.cpm)} €</td>
+                  </tr>
+                ))
+              )}
+            </tbody>
+          </table>
+        </div>
+      </div>
+    </div>,
+    document.body,
+  );
+}
+
 function SortGlyph({ active, dir }: { active: boolean; dir: 'asc' | 'desc' }) {
   if (!active) return <ChevronsUpDown className="w-3 h-3 text-fg/35" />;
   return <span className="text-teal-400 font-mono text-[10px]">{dir === 'asc' ? '↑' : '↓'}</span>;
@@ -393,38 +649,59 @@ export default function SummaryPanel() {
   const { simulation, activeHypothesisId, getHypothesisSummary, updateHypothesis } = useSimulationStore();
   const activeVersion = useVersionStore(s => s.activeVersion);
   const [storeTableOpen, setStoreTableOpen] = useState(false);
+  const [leversTableOpen, setLeversTableOpen] = useState(false);
 
   if (!simulation || !activeHypothesisId) return null;
 
   const summary = getHypothesisSummary(activeHypothesisId);
   const hypothesis = simulation.hypotheses.find(h => h.id === activeHypothesisId);
+  const activeHypothesisIndex = simulation.hypotheses.findIndex(h => h.id === activeHypothesisId);
+  const recapAccent = getHypothesisAccentColor(activeHypothesisIndex >= 0 ? activeHypothesisIndex : 0);
 
   if (!summary || !hypothesis) {
     return (
       <div className="glass-card p-4 text-center">
         <Layers className="w-8 h-8 text-fg/42 mx-auto mb-3" />
         <p className="text-sm text-fg/60">
-          Ajoutez des leviers pour voir le récapitulatif
+          Ajoutez des leviers ou des prestations additionnelles pour voir le récapitulatif
         </p>
       </div>
     );
   }
 
   const totalImpressions = summary.leverBreakdown.reduce((s, l) => s + l.impressions, 0);
-  const leversBudgetUsed = hypothesis.levers.reduce((s, l) => s + l.budget, 0);
+  const leversBudgetUsed = summary.totalBudget;
 
-  const prestations = simulation.prestations ?? [];
+  const prestations = hypothesis.prestations ?? [];
   const prestationsBilled = prestations.reduce((s, p) => s + (p.offered ? 0 : p.price * (p.quantity ?? 1)), 0);
   const hasPrestations = prestations.length > 0;
   const grandTotal = leversBudgetUsed + prestationsBilled;
 
+  const leverRows: LeverRecapRow[] = summary.leverBreakdown.map(l => ({
+    id: l.id,
+    name: l.name,
+    budget: l.budget,
+    impressions: l.impressions,
+    coverage: l.coverage,
+    repetition: l.repetition,
+    cpm: l.cpm,
+  }));
+  const sortedLeversByBudget = [...leverRows].sort((a, b) => a.budget - b.budget);
+  const minLever = sortedLeversByBudget[0];
+  const maxLever = sortedLeversByBudget[sortedLeversByBudget.length - 1];
+
   return (
     <div className="space-y-4 animate-slide-in">
-      {/* Title */}
-      <div className="flex items-center justify-between">
-        <h3 className="text-xs font-semibold uppercase tracking-wider text-fg/72">
+      {/* Title + accent bar (même code couleur que le bandeau de l’hypothèse) */}
+      <div className="flex items-center gap-3 min-w-0">
+        <h3 className="text-xs font-semibold uppercase tracking-wider text-fg/72 shrink-0">
           Récapitulatif · {hypothesis.name}
         </h3>
+        <div
+          className="flex-1 min-w-0 h-1.5 rounded-full"
+          style={{ backgroundColor: recapAccent }}
+          aria-hidden
+        />
       </div>
 
       {/* KPIs grid */}
@@ -506,6 +783,12 @@ export default function SummaryPanel() {
         marginPercent={summary.marginPercent}
       />
 
+      {/* Impressions total */}
+      <div className="glass-card p-3 text-left">
+        <span className="text-[10px] uppercase tracking-wider text-fg/60 block mb-1">Total impressions</span>
+        <div className="text-xl font-bold font-mono text-teal-400">{formatImpressions(totalImpressions)}</div>
+      </div>
+
       {/* Store extremes */}
       <div className="glass-card p-3 space-y-2">
         <div className="flex items-center gap-2 mb-1">
@@ -546,6 +829,47 @@ export default function SummaryPanel() {
         rows={summary.storeBudgets}
         hypothesisName={hypothesis.name}
       />
+
+      {/* Leviers — même logique que « Points de vente » : min / max budget + tableau */}
+      {leverRows.length > 0 && minLever && maxLever && (
+        <>
+          <div className="glass-card p-3 space-y-2">
+            <div className="flex items-center gap-2 mb-1">
+              <Layers className="w-3.5 h-3.5 text-fg/60 shrink-0" />
+              <span className="text-[10px] uppercase tracking-wider text-fg/60">Leviers</span>
+              <button
+                type="button"
+                onClick={() => setLeversTableOpen(true)}
+                className="ml-auto flex items-center gap-1.5 text-[10px] uppercase tracking-wider text-teal-400/90 hover:text-teal-300 px-2 py-1 rounded-lg border border-teal-400/25 hover:border-teal-400/45 bg-teal-400/5 transition-colors"
+              >
+                <Table2 className="w-3 h-3" />
+                Détail
+              </button>
+            </div>
+            <div className="flex items-start justify-between text-xs gap-2">
+              <div className="flex items-start gap-2 min-w-0 flex-1">
+                <TrendingDown className="w-3 h-3 text-coral-400 shrink-0 mt-0.5" />
+                <span className="text-fg/82 min-w-0 break-words line-clamp-2 leading-snug">{minLever.name}</span>
+              </div>
+              <span className="font-mono text-coral-400 shrink-0 self-start pt-0.5">{formatNum(minLever.budget)}€</span>
+            </div>
+            <div className="flex items-start justify-between text-xs gap-2">
+              <div className="flex items-start gap-2 min-w-0 flex-1">
+                <TrendingUp className="w-3 h-3 text-teal-400 shrink-0 mt-0.5" />
+                <span className="text-fg/82 min-w-0 break-words line-clamp-2 leading-snug">{maxLever.name}</span>
+              </div>
+              <span className="font-mono text-teal-400 shrink-0 self-start pt-0.5">{formatNum(maxLever.budget)}€</span>
+            </div>
+          </div>
+
+          <LeversRecapDialog
+            open={leversTableOpen}
+            onClose={() => setLeversTableOpen(false)}
+            rows={leverRows}
+            hypothesisName={hypothesis.name}
+          />
+        </>
+      )}
 
       {/* Pie chart — Recharts 3: ResponsiveContainer needs a positive measured size; minWidth avoids flex 0-width */}
       <div className="glass-card p-4 min-w-0 w-full">
@@ -630,12 +954,6 @@ export default function SummaryPanel() {
           </ResponsiveContainer>
         </div>
       </div>
-
-      {/* Impressions total */}
-      <div className="glass-card p-3 text-center">
-        <span className="text-[10px] uppercase tracking-wider text-fg/60">Total impressions</span>
-        <div className="text-xl font-bold font-mono text-teal-400 mt-1">{formatImpressions(totalImpressions)}</div>
-      </div>
     </div>
   );
 }
@@ -665,7 +983,7 @@ function MargeRecap({
   const threshold = getMarginThreshold(grandTotal);
   const ok = marginPercent >= threshold.minMarginPercent;
   const clamped = Math.max(0, Math.min(100, marginPercent));
-  const barColor = ok ? 'from-indigo-500 via-teal-400 to-teal-400' : 'from-coral-400 via-amber-400 to-amber-500';
+  const thPct = Math.min(100, threshold.minMarginPercent);
 
   return (
     <div className="glass-card p-4 space-y-4">
@@ -718,15 +1036,27 @@ function MargeRecap({
         <span className={`text-2xl font-bold font-mono ${ok ? 'text-teal-400' : 'text-coral-400'}`}>
           {marginPercent.toFixed(2)} %
         </span>
-        <div className="mt-2 h-2 rounded-full bg-navy-800/60 overflow-hidden relative">
+        <div className="mt-2 relative w-full h-3.5">
+          <div className="absolute inset-0 flex rounded-full overflow-hidden border border-fg/10">
+            <div className="h-full shrink-0 bg-red-500/45" style={{ width: `${thPct}%` }} />
+            <div className="h-full min-w-0 flex-1 bg-emerald-500/40" />
+          </div>
           <div
-            className={`h-full bg-gradient-to-r ${barColor} transition-all`}
-            style={{ width: `${clamped}%` }}
+            className={
+              'absolute top-0 bottom-0 z-[5] pointer-events-none bg-navy-900/80 transition-[left] ' +
+              (clamped === 0 ? 'left-0 right-0 rounded-full' : 'rounded-r-full')
+            }
+            style={clamped === 0 ? undefined : { left: `${clamped}%`, right: 0 }}
+            aria-hidden
           />
-          {/* Threshold marker */}
           <div
-            className="absolute top-0 bottom-0 w-px bg-fg/60"
-            style={{ left: `${Math.min(100, threshold.minMarginPercent)}%` }}
+            className="absolute z-20 w-1.5 -translate-x-1/2 rounded-sm bg-amber-200 shadow-[0_0_0_1px_rgba(0,0,0,0.25),0_1px_2px_rgba(0,0,0,0.15)]"
+            style={{
+              left: `${thPct}%`,
+              top: '50%',
+              height: 22,
+              transform: 'translate(-50%, -50%)',
+            }}
             title={`Seuil ${threshold.minMarginPercent}% (${threshold.label})`}
           />
         </div>

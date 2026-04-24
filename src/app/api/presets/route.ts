@@ -9,7 +9,7 @@ export async function GET() {
 
 export async function POST(request: Request) {
   const body = await request.json();
-  const { name, description, objectiveMode, budgetMode, totalBudget, maxBudgetPerStore, levers, scope, ownerProfileId } = body;
+  const { name, description, objectiveMode, budgetMode, totalBudget, maxBudgetPerStore, levers, prestations, scope, ownerProfileId } = body;
   const presetId: string = body.id || randomUUID();
   const presetScope = scope === 'user' ? 'user' : 'admin';
   const ownerId = presetScope === 'user' ? (ownerProfileId ?? null) : null;
@@ -30,6 +30,14 @@ export async function POST(request: Request) {
       await tx`
         INSERT INTO preset_levers (id, preset_id, type, cpm, purchase_cpm, min_budget_per_store, budget, budget_percent, repetition, coverage, max_coverage, impressions, start_date, end_date, sort_order)
         VALUES (${randomUUID()}, ${presetId}, ${l.type as string}, ${l.cpm as number}, ${(l.purchaseCpm as number) ?? 0}, ${l.minBudgetPerStore as number}, ${l.budget as number}, ${l.budgetPercent as number}, ${l.repetition as number}, ${l.coverage as number}, ${l.maxCoverage as number}, ${l.impressions as number}, ${(l.startDate as string) || ''}, ${(l.endDate as string) || ''}, ${i})
+      `;
+    }
+    const prestList: unknown[] = Array.isArray(prestations) ? prestations : [];
+    for (let i = 0; i < prestList.length; i++) {
+      const p = prestList[i] as Record<string, unknown>;
+      await tx`
+        INSERT INTO preset_prestations (id, preset_id, name, category, quantity, production_cost, price, offered, sort_order)
+        VALUES (${randomUUID()}, ${presetId}, ${(p.name as string) ?? ''}, ${(p.category as string) ?? null}, ${(p.quantity as number) ?? 1}, ${(p.productionCost as number) ?? 0}, ${(p.price as number) ?? 0}, ${p.offered ? 1 : 0}, ${i})
       `;
     }
   });
